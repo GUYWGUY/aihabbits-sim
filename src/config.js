@@ -22,9 +22,9 @@ export const CONFIG = {
 
   // ---- event engine ----
   EVENT_FIRST_AT_S: 20,               // earliest possible event
-  EVENT_CHECK_S: 25,                  // minimum spacing between checks
-  EVENT_CHECK_JITTER_S: 8,            // randomness on top
-  EVENT_PROB: 0.6,                    // P(trigger | check)
+  EVENT_CHECK_S: 18,                  // minimum spacing between checks
+  EVENT_CHECK_JITTER_S: 4,            // randomness on top (average 20s)
+  EVENT_PROB: 1.0,                    // P(trigger | check) - always trigger when check time arrives
   MAX_EVENTS: 12,                     // safety cap
 
   // ---- per-event time costs (seconds added to the cashier-front timer) ----
