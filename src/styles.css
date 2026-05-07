@@ -457,9 +457,8 @@ body {
   .topbar .brand { flex: 1 1 auto; min-width: 0; gap: 8px; }
   .topbar .brand .title {
     font-size: 11.5px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
   }
   .topbar .brand .sub   { display: none; }   /* hide subtitle on phone */
   .topbar .pill { font-size: 9.5px; padding: 4px 7px; flex-shrink: 0; }
@@ -529,7 +528,7 @@ body {
   .side .event-banner {
     position: fixed;
     left: 8px; right: 8px;
-    bottom: calc(28vh + 16px + 100px);   /* log(28vh) + gap + actions(~100px) */
+    bottom: calc(24px + 100px);   /* moved down, log removed */
     margin: 0;
     padding: 10px 12px;
     font-size: 12px;
@@ -537,11 +536,11 @@ body {
     z-index: 14;
   }
 
-  /* ---- Action panel: just above the log, full width ---- */
+  /* ---- Action panel: at bottom of screen, full width ---- */
   .side .actions {
     position: fixed;
     left: 8px; right: 8px;
-    bottom: calc(28vh + 16px);
+    bottom: 16px;
     padding: 10px 12px;
     z-index: 13;
   }
@@ -557,19 +556,10 @@ body {
   }
   .side .actions .note { font-size: 10.5px; line-height: 1.35; }
 
-  /* ---- Log: bottom of screen, full width ---- */
+  /* ---- Log: hidden on mobile portrait ---- */
   .log {
-    left: 8px; right: 8px;
-    bottom: 8px;
-    width: auto;
-    height: 28vh;
-    max-height: 28vh;
-    font-size: 11.5px;
-    padding: 8px 10px;
-    z-index: 12;
+    display: none;
   }
-  .log p { padding: 5px 8px; font-size: 11px; line-height: 1.4; }
-  .log p .time { font-size: 9.5px; }
 
   /* Floating point text smaller on small screens */
   .float-text { font-size: 18px; }
