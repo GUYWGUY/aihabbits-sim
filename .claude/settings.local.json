@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx --yes serve . -p 8000 -L)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8000/)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}  index.html\\\\n\" http://localhost:8000/index.html)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8000/src/world.js)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8000/src/events.js)",
+      "Bash(node --check \"C:/Users/Guy/OneDrive - ariel.ac.il/Apps/AiHabbits/src/world.js\")",
+      "Bash(node --check \"C:/Users/Guy/OneDrive - ariel.ac.il/Apps/AiHabbits/src/events.js\")",
+      "Bash(node --check \"C:/Users/Guy/OneDrive - ariel.ac.il/Apps/AiHabbits/src/gameState.js\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} world.js\\\\n\" http://localhost:8000/src/world.js)",
+      "Bash(node --check \"C:/Users/Guy/OneDrive - ariel.ac.il/Apps/AiHabbits/src/config.js\")",
+      "Bash(node --check \"C:/Users/Guy/OneDrive - ariel.ac.il/Apps/AiHabbits/src/ui.js\")",
+      "Bash(curl -s http://localhost:8000/src/world.js)"
+    ]
+  }
+}

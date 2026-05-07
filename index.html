@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkout Queue — Behavioral Study</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./src/styles.css" />
+
+  <!-- ES module importmap so we don't need a build step for development.
+       The Vite build step inlines these properly for production. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D scene canvas -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- HUD overlay (populated by ui.js) -->
+  <div id="hud" class="hud"></div>
+
+  <!-- Hidden MTurk submission form -->
+  <form
+    id="mturk-form"
+    method="POST"
+    action="https://www.mturk.com/mturk/externalSubmit"
+    style="display:none"
+  >
+    <input type="hidden" name="assignmentId" />
+    <input type="hidden" name="workerId" />
+    <input type="hidden" name="hitId" />
+    <input type="hidden" name="final_score" />
+    <input type="hidden" name="rl_trajectory_log" />
+    <input type="hidden" name="metadata" />
+  </form>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

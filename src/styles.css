@@ -1,0 +1,627 @@
+/* ============================================================
+   Checkout Queue — HUD overlay over a 3D Three.js scene.
+   Premium glass UI, cinematic palette, Inter typography.
+   ============================================================ */
+
+:root {
+  --bg-0: #0b1020;
+  --bg-1: #131845;
+  --glass: rgba(15, 18, 45, 0.55);
+  --glass-strong: rgba(255, 255, 255, 0.10);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --text: #eef1ff;
+  --text-dim: #a8b0d8;
+  --accent: #7c5cff;
+  --accent-2: #29d4c4;
+  --good: #3ddc84;
+  --warn: #ffb547;
+  --bad: #ff5c7a;
+  --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --shadow-deep: 0 20px 60px rgba(0, 0, 0, 0.55);
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+body {
+  font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: var(--text);
+  background: #05060f;
+}
+
+/* ---------- 3D canvas ---------- */
+#bg-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
+/* ---------- HUD root ---------- */
+.hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none; /* children opt-in */
+}
+.hud > * { pointer-events: auto; }
+
+/* ---------- Glass primitive ---------- */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: var(--shadow-soft);
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: absolute;
+  top: 14px; left: 14px; right: 14px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+}
+.brand {
+  display: flex; align-items: center; gap: 12px;
+}
+.brand .logo {
+  width: 38px; height: 38px; border-radius: 10px;
+  background: conic-gradient(from 220deg, var(--accent), var(--accent-2), var(--accent));
+  display: grid; place-items: center;
+  font-size: 19px;
+  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.45);
+}
+.brand .title { font-weight: 700; letter-spacing: 0.2px; font-size: 15px; }
+.brand .sub   { font-size: 11px; color: var(--text-dim); }
+
+.pill {
+  padding: 6px 11px; border-radius: 999px;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  font-size: 12px; color: var(--text-dim);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.pill .dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--good); box-shadow: 0 0 10px var(--good);
+}
+.pill.warn .dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+
+/* ---------- Side panel (right) ---------- */
+.side {
+  position: absolute;
+  top: 78px; right: 14px;
+  width: 320px;
+  display: grid; gap: 12px;
+}
+.stat-card { padding: 14px 16px; }
+.stat-row  { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.stat-label{ color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.9px; }
+.score {
+  font-size: 36px; font-weight: 800; line-height: 1;
+  background: linear-gradient(90deg, #fff, var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.score.flash { animation: scoreFlash 0.5s ease; }
+@keyframes scoreFlash {
+  0%   { filter: brightness(1); }
+  50%  { filter: brightness(1.7) hue-rotate(-25deg); transform: scale(1.04); }
+  100% { filter: brightness(1); }
+}
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 13px; }
+.kv .k { color: var(--text-dim); }
+.kv .v { font-weight: 600; }
+
+/* ---------- Event banner ---------- */
+.event-banner {
+  display: none;
+  align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, rgba(255, 92, 122, 0.18), rgba(255, 181, 71, 0.18));
+  border: 1px solid rgba(255, 181, 71, 0.4);
+  color: var(--text);
+  font-size: 13px;
+  animation: shake 0.5s ease;
+}
+.event-banner.show { display: flex; }
+.event-banner .ico { font-size: 18px; }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-4px); }
+  75%      { transform: translateX(4px); }
+}
+
+/* ---------- Action panel ---------- */
+.actions {
+  padding: 14px 16px;
+  display: grid; gap: 10px;
+}
+.actions h4 {
+  margin: 0 0 4px;
+  font-size: 11px; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.action-grid .btn { width: 100%; padding: 11px 10px; font-size: 12.5px; }
+.actions .note {
+  font-size: 11.5px; color: var(--text-dim);
+  grid-column: 1 / -1;
+  line-height: 1.4;
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 18px; border-radius: 11px; cursor: pointer;
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(180deg, rgba(124, 92, 255, 0.95), rgba(80, 50, 220, 1));
+  color: white; font-weight: 600; font-size: 14px;
+  font-family: inherit;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, opacity 0.14s ease, filter 0.14s ease;
+  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.35);
+}
+.btn:hover  { transform: translateY(-1px); filter: brightness(1.06); }
+.btn:active { transform: translateY(0); }
+.btn[disabled], .btn.disabled {
+  opacity: 0.45; cursor: not-allowed; box-shadow: none; filter: grayscale(0.3);
+}
+.btn.ghost   { background: var(--glass-strong); color: var(--text); box-shadow: none; }
+.btn.success { background: linear-gradient(180deg, rgba(61, 220, 132, 0.95), rgba(20, 160, 90, 1));
+               box-shadow: 0 6px 18px rgba(61, 220, 132, 0.35); }
+.btn.warn    { background: linear-gradient(180deg, rgba(255, 181, 71, 0.95), rgba(200, 130, 30, 1));
+               box-shadow: 0 6px 18px rgba(255, 181, 71, 0.35); }
+.btn.danger  { background: linear-gradient(180deg, rgba(255, 92, 122, 0.95), rgba(190, 40, 70, 1));
+               box-shadow: 0 6px 18px rgba(255, 92, 122, 0.35); }
+
+/* ---------- Narrative log (bottom-left) ---------- */
+.log {
+  position: absolute;
+  left: 14px; bottom: 14px;
+  width: 380px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-size: 12.5px;
+}
+.log p {
+  margin: 0 0 5px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--glass-strong);
+  border-left: 3px solid var(--accent-2);
+  line-height: 1.45;
+}
+.log p.warn { border-left-color: var(--warn); }
+.log p.bad  { border-left-color: var(--bad); }
+.log p.good { border-left-color: var(--good); }
+.log p .time { color: var(--text-dim); font-size: 10.5px; margin-right: 6px; }
+.log::-webkit-scrollbar { width: 6px; }
+.log::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 3px; }
+
+/* ---------- Floating 3D-projected text (+/- points) ---------- */
+.float-text {
+  position: absolute;
+  pointer-events: none;
+  font-weight: 800; font-size: 22px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7), 0 0 16px rgba(0, 0, 0, 0.6);
+  animation: floatUp 1.6s ease-out forwards;
+  z-index: 20;
+  transform: translate(-50%, -50%);
+  letter-spacing: 0.5px;
+}
+.float-text.gain { color: var(--good); }
+.float-text.loss { color: var(--bad); }
+.float-text.neutral { color: var(--warn); }
+@keyframes floatUp {
+  0%   { transform: translate(-50%, -50%) translateY(0); opacity: 1; }
+  100% { transform: translate(-50%, -50%) translateY(-80px); opacity: 0; }
+}
+
+/* ---------- Speech bubbles tied to a 3D position ---------- */
+.speech {
+  position: absolute;
+  background: white; color: #222;
+  padding: 6px 9px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -100%);
+  animation: bubbleIn 0.3s ease;
+  z-index: 18;
+  pointer-events: none;
+}
+.speech::after {
+  content: '';
+  position: absolute; top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: white;
+}
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translate(-50%, -100%) translateY(8px); }
+  to   { opacity: 1; transform: translate(-50%, -100%); }
+}
+
+/* ---------- Cashier progress bar (under the counter) ---------- */
+.cashier-bar {
+  position: absolute;
+  left: 50%; bottom: 18%;
+  transform: translateX(-50%);
+  width: min(420px, 38vw);
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+}
+.cashier-bar > div {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  box-shadow: 0 0 14px var(--accent-2);
+  transition: width 0.1s linear;
+}
+
+/* ---------- Screens (intro / end / preview) ---------- */
+.screen {
+  position: absolute; inset: 0;
+  display: none;
+  align-items: center; justify-content: center;
+  padding: 32px;
+  background: radial-gradient(800px 500px at 50% 20%, rgba(124, 92, 255, 0.15), transparent 60%),
+              rgba(5, 6, 15, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 50;          /* always above the in-game HUD layers */
+}
+.screen.active { display: flex; }
+
+/* Hide the in-game HUD entirely whenever an intro/end screen is up, so the
+   action panel / event banner / etc. don't peek through the screen overlay
+   on mobile (where they're fixed-positioned with their own z-indexes). */
+.hud:has(> .screen.active) > :not(.screen) {
+  display: none !important;
+}
+
+.card {
+  width: min(960px, 94%);
+  padding: 32px;
+  display: grid;
+  gap: 22px;
+}
+.card.two-col {
+  grid-template-columns: 1.3fr 1fr;
+  align-items: stretch;
+}
+.card h1 {
+  margin: 0 0 6px;
+  font-size: 32px; font-weight: 800;
+  background: linear-gradient(90deg, #fff, #b8a7ff 60%, var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.card p { color: var(--text-dim); line-height: 1.6; margin: 0; }
+
+.rules { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; }
+.rules li {
+  padding: 12px 14px;
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 11px;
+  font-size: 13.5px;
+}
+.rules .ico { font-size: 18px; }
+
+.aside {
+  padding: 22px;
+  display: flex; flex-direction: column; gap: 12px;
+  background: linear-gradient(180deg, rgba(124, 92, 255, 0.10), rgba(41, 212, 196, 0.08));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+}
+.aside h3 { margin: 0; font-weight: 700; }
+.aside .stat {
+  display: flex; justify-content: space-between;
+  font-size: 13px;
+  padding: 9px 12px;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 9px;
+}
+
+.legend { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+.legend span { background: var(--glass-strong); border: 1px solid var(--glass-border);
+               padding: 4px 8px; border-radius: 999px; }
+
+.notice {
+  padding: 16px;
+  margin-top: 8px;
+  text-align: center;
+  color: var(--warn);
+  font-weight: 600;
+  border-radius: var(--radius);
+  background: rgba(255, 181, 71, 0.07);
+  border: 1px dashed rgba(255, 181, 71, 0.4);
+}
+.notice .badge {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 999px;
+  background: rgba(255, 181, 71, 0.18);
+  border: 1px solid rgba(255, 181, 71, 0.4);
+}
+.notice .small {
+  margin-top: 8px;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* End screen */
+.end-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 20px auto;
+  max-width: 700px;
+}
+.end-grid .glass { padding: 14px; text-align: center; }
+.end-grid .num   { font-size: 22px; font-weight: 700; }
+.big-score {
+  font-size: 78px; font-weight: 800;
+  margin: 12px 0 4px;
+  color: var(--good);
+  text-shadow: 0 0 30px rgba(61, 220, 132, 0.5);
+  text-align: center;
+}
+.end-actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+
+/* Urgent overlay vignette during events */
+.urgent-vignette {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  box-shadow: inset 0 0 220px 40px rgba(255, 92, 122, 0.55);
+  transition: opacity 0.3s ease;
+}
+.urgent-vignette.active { opacity: 1; animation: vignettePulse 1.6s infinite ease-in-out; }
+@keyframes vignettePulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.95; }
+}
+
+/* Loader (briefly shown while Three.js inits) */
+.loader {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  background: radial-gradient(800px 500px at 50% 50%, rgba(124, 92, 255, 0.3), transparent 60%),
+              #05060f;
+  z-index: 30;
+  transition: opacity 0.5s ease;
+}
+.loader .spinner {
+  width: 42px; height: 42px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--accent-2);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.loader.hidden { opacity: 0; pointer-events: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 920px) {
+  .card.two-col { grid-template-columns: 1fr; }
+  .side { width: 280px; }
+  .log  { width: 280px; max-height: 160px; }
+}
+
+/* ============================================================================
+   Portrait phones — full-screen vertical stack:
+
+   ┌──────────────────────┐
+   │  topbar (title)      │
+   ├──────────────────────┤
+   │  score (transparent) │
+   │                      │
+   │   3D scene visible   │
+   │                      │
+   │  event banner        │  ← only when active
+   │  action panel        │
+   │  log (full width)    │
+   └──────────────────────┘
+
+   ============================================================================ */
+@media (max-width: 720px) and (orientation: portrait) {
+
+  /* ---- Topbar tightened to a single line so we can stack the score
+          panel right below it deterministically. ---- */
+  .topbar {
+    top: 6px; left: 6px; right: 6px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow: hidden;
+  }
+  .topbar .logo { width: 28px; height: 28px; font-size: 14px; border-radius: 8px; }
+  .topbar .brand { flex: 1 1 auto; min-width: 0; gap: 8px; }
+  .topbar .brand .title {
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topbar .brand .sub   { display: none; }   /* hide subtitle on phone */
+  .topbar .pill { font-size: 9.5px; padding: 4px 7px; flex-shrink: 0; }
+
+  /* ---- Cashier progress bar: hidden on mobile (would overlap the action stack) ---- */
+  .cashier-bar { display: none; }
+
+  /* ---- Side panel ghosted: stat-card pinned top, event-banner + actions
+          pinned to the bottom stack via fixed positioning. ---- */
+  .side { display: contents; }
+
+  /* Stat card — transparent, sits just below the topbar, hugging the LEFT.
+     White text with shadow so it stays readable over the live 3D scene. */
+  .side .stat-card {
+    position: fixed;
+    top: 50px;
+    left: 14px;
+    right: auto;        /* size to natural content width on the left */
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 0;
+    pointer-events: none;
+    text-align: left;
+    z-index: 11;
+  }
+  .side .stat-card .stat-row {
+    justify-content: flex-start;
+    align-items: baseline;
+    gap: 18px;
+  }
+  /* Override the inline text-align:right on the Elapsed sub-block so both
+     "Current Points" and "Elapsed" line up flush left. */
+  .side .stat-card .stat-row > div { text-align: left !important; }
+  .side .stat-card .stat-label {
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+  }
+  .side .stat-card .score {
+    font-size: 28px;
+    line-height: 1.1;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+  }
+  .side .stat-card #timeText {
+    font-size: 18px !important;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.85);
+  }
+  .side .stat-card .kv {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    margin-top: 4px;
+    grid-template-columns: none;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.85);
+  }
+  /* Show only "Position" (first key/value pair); hide queue length, cashier %, decisions */
+  .side .stat-card .kv > *:nth-child(n+3) { display: none; }
+  .side .stat-card .kv .k { color: rgba(255, 255, 255, 0.78); }
+  .side .stat-card .kv .v { font-weight: 700; color: #fff; }
+
+  /* ---- Event banner: above actions, full width ---- */
+  .side .event-banner {
+    position: fixed;
+    left: 8px; right: 8px;
+    bottom: calc(28vh + 16px + 100px);   /* log(28vh) + gap + actions(~100px) */
+    margin: 0;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    z-index: 14;
+  }
+
+  /* ---- Action panel: just above the log, full width ---- */
+  .side .actions {
+    position: fixed;
+    left: 8px; right: 8px;
+    bottom: calc(28vh + 16px);
+    padding: 10px 12px;
+    z-index: 13;
+  }
+  .side .actions h4 {
+    font-size: 9.5px;
+    margin: 0 0 4px;
+  }
+  .side .actions .action-grid { gap: 6px; }
+  .side .actions .action-grid .btn {
+    font-size: 11.5px;
+    padding: 9px 8px;
+    border-radius: 8px;
+  }
+  .side .actions .note { font-size: 10.5px; line-height: 1.35; }
+
+  /* ---- Log: bottom of screen, full width ---- */
+  .log {
+    left: 8px; right: 8px;
+    bottom: 8px;
+    width: auto;
+    height: 28vh;
+    max-height: 28vh;
+    font-size: 11.5px;
+    padding: 8px 10px;
+    z-index: 12;
+  }
+  .log p { padding: 5px 8px; font-size: 11px; line-height: 1.4; }
+  .log p .time { font-size: 9.5px; }
+
+  /* Floating point text smaller on small screens */
+  .float-text { font-size: 18px; }
+
+  /* ---- INTRO / END screens: scrollable, single-column, comfortable padding ---- */
+  .screen {
+    align-items: flex-start;
+    padding: 12px 8px 24px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .card {
+    width: 100%;
+    padding: 18px 14px;
+    gap: 14px;
+  }
+  .card.two-col { grid-template-columns: 1fr; gap: 14px; }
+  .card h1 { font-size: 22px; line-height: 1.25; }
+  .card p  { font-size: 13px; line-height: 1.55; }
+
+  .rules { gap: 8px; }
+  .rules li {
+    font-size: 12.5px;
+    padding: 9px 11px;
+    gap: 8px;
+    line-height: 1.4;
+  }
+  .rules .ico { font-size: 16px; }
+  .legend { font-size: 10px; }
+  .legend span { padding: 3px 7px; }
+
+  .aside { padding: 14px; gap: 9px; }
+  .aside h3 { font-size: 14px; }
+  .aside .stat { font-size: 11.5px; padding: 7px 10px; }
+  .aside .btn { font-size: 13px; padding: 10px 14px; width: 100%; }
+
+  /* End screen */
+  .end-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    max-width: 100%;
+    margin: 14px 0;
+  }
+  .end-grid .glass { padding: 8px; }
+  .end-grid .stat-label { font-size: 9px; }
+  .end-grid .num { font-size: 16px; }
+  .big-score { font-size: 48px; margin: 8px 0; }
+  .end-actions { flex-direction: column; gap: 8px; align-items: stretch; }
+  .end-actions .btn { width: 100%; font-size: 12.5px; padding: 11px 14px; }
+
+  /* Preview / dev-mode notice on intro */
+  .notice { padding: 12px; font-size: 12px; }
+  .notice .badge { font-size: 10px; }
+  .notice .small { font-size: 10.5px; }
+}
