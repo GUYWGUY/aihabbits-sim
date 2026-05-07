@@ -40,7 +40,15 @@ export class EventEngine {
   }
 
   maybeTrigger() {
-    if (this.gs.activeEvent) return;
+    if (this.gs.activeEvent) {
+      if (this.gs.elapsedSec - this.gs.activeEvent.startedAt >= 10) {
+        const type = this.gs.activeEvent.type;
+        if (type === 'DROP') this.resolveDrop('DO_NOTHING');
+        else if (type === 'CUTTER') this.resolveCutter('LET_IT_GO');
+        else if (type === 'ISRAELI_QUEUE') this.resolveIsraeliQueue('WAIT');
+      }
+      return;
+    }
     if (this.gs.elapsedSec < this.nextCheckSec) return;
     this.nextCheckSec =
       this.gs.elapsedSec + CONFIG.EVENT_CHECK_S + Math.random() * CONFIG.EVENT_CHECK_JITTER_S;
@@ -116,6 +124,7 @@ export class EventEngine {
   }
 
   resolveDrop(action) {
+    if (!this.gs.activeEvent) return;
     const prevState = this.gs.snapshotState();
     const customer = this.gs.activeEvent.npc;
     const isAtCashier = !!this.gs.activeEvent.isAtCashier;
@@ -245,6 +254,7 @@ export class EventEngine {
   }
 
   resolveCutter(action) {
+    if (!this.gs.activeEvent) return;
     const prevState = this.gs.snapshotState();
     const cutter = this.gs.activeEvent.cutter;
 
@@ -375,6 +385,7 @@ export class EventEngine {
   }
 
   resolveIsraeliQueue(action) {
+    if (!this.gs.activeEvent) return;
     const prevState = this.gs.snapshotState();
     const friend = this.gs.activeEvent.friend;
     const inFront = this.gs.activeEvent.npc;
