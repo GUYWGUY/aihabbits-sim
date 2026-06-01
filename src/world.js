@@ -963,9 +963,9 @@ export class World {
       const item = {
         mesh,
         physics: {
-          vx: (Math.random() - 0.5) * 1.4,
-          vy: 1.0 + Math.random() * 0.7,
-          vz: (Math.random() - 0.5) * 0.6, // slight symmetric scatter around the new origin
+          vx: (Math.random() - 0.5) * 0.6, // tighter horizontal scatter
+          vy: 0.5 + Math.random() * 0.4,   // lower upward hop, drops more directly
+          vz: (Math.random() - 0.5) * 0.4, // tighter forward/backward scatter
           rotX: (Math.random() - 0.5) * 7,
           rotY: (Math.random() - 0.5) * 7,
           rotZ: (Math.random() - 0.5) * 7,
