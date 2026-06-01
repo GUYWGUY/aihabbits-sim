@@ -30,10 +30,11 @@ const ui = new UI({
   onDownload: handleDownload,
 });
 
+let loopCrashed = false;
+
 // kick off the render loop immediately so the scene is live behind the intro
 animate();
 
-let loopCrashed = false;
 function animate() {
   if (loopCrashed) return;
   requestAnimationFrame(animate);
