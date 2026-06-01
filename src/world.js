@@ -177,7 +177,10 @@ export class World {
     this._buildShelves();
 
     // ---- cashier counter (cluster of meshes) ----
-    this._buildCashierStation();
+    this._buildCashierStation(0, true);
+    this._buildCashierStation(-5.5, false);
+    this._buildCashierStation(5.5, false);
+    this._buildBackgroundQueues();
 
     // ---- ambient background shoppers (depth + atmosphere) ----
     this._buildAmbientNPCs();
@@ -249,7 +252,7 @@ export class World {
     }
   }
 
-  _buildCashierStation() {
+  _buildCashierStation(offsetX = 0, isActive = true) {
     const group = new THREE.Group();
 
     // counter base
@@ -277,7 +280,7 @@ export class World {
     );
     belt.position.set(0, 1.07, 0.45);
     group.add(belt);
-    this.beltMesh = belt;
+    if (isActive) this.beltMesh = belt;
 
     // register / monitor
     const register = new THREE.Mesh(
@@ -311,7 +314,7 @@ export class World {
     );
     scanner.position.set(-0.5, 1.10, 0.2);
     group.add(scanner);
-    this.scannerMesh = scanner;
+    if (isActive) this.scannerMesh = scanner;
 
     // bagging station (a couple of shopping bags)
     for (let i = 0; i < 2; i++) {
@@ -333,11 +336,73 @@ export class World {
     cashier.position.set(0, 0, -0.95);
     cashier.rotation.y = 0;
     group.add(cashier);
-    this.cashierMesh = cashier;
 
-    group.position.set(CASHIER_X, 0, -0.4);
+    if (!isActive) {
+      group.traverse((c) => {
+        if (c.isMesh && c.material) {
+          c.material = c.material.clone();
+          if (c.material.color) c.material.color.multiplyScalar(0.7);
+          if (c.material.emissive) c.material.emissive.multiplyScalar(0.5);
+        }
+      });
+      if (!this.backgroundNPCs) this.backgroundNPCs = [];
+      this.backgroundNPCs.push({
+        mesh: cashier,
+        bobPhase: Math.random() * Math.PI * 2,
+        isCashier: true
+      });
+    }
+
+    group.position.set(CASHIER_X + offsetX, 0, -0.4);
     this.scene.add(group);
-    this.cashierGroup = group;
+    
+    if (isActive) {
+      this.cashierGroup = group;
+      this.cashierMesh = cashier;
+    }
+  }
+
+  _buildBackgroundQueues() {
+    if (!this.backgroundNPCs) this.backgroundNPCs = [];
+    const offsets = [-5.5, 5.5];
+    const ageOptions = ['Adult', 'Adult', 'Adult', 'Elderly', 'Youth'];
+    const stateOptions = ['Standard', 'Standard', 'Pregnant', 'Standard'];
+    
+    offsets.forEach(offsetX => {
+      const queueLen = 3 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < queueLen; i++) {
+        const profile = {
+          id: 'bg_' + Math.random().toString(36).slice(2, 9),
+          age: pick(ageOptions),
+          state: pick(stateOptions),
+          label: 'Shopper',
+          gender: Math.random() < 0.5 ? 'M' : 'F',
+          isPlayer: false,
+        };
+        const mesh = buildCharacter(profile);
+        
+        const zPos = QUEUE_FRONT_Z + i * QUEUE_SPACING;
+        mesh.position.set(0.4 + offsetX, 0, zPos);
+        mesh.rotation.y = -Math.PI / 2 + (Math.random() * 0.4 - 0.2);
+        
+        mesh.traverse((c) => { 
+          if (c.isMesh) {
+            c.castShadow = false;
+            if (c.material) {
+              c.material = c.material.clone();
+              if (c.material.color) c.material.color.multiplyScalar(0.7);
+            }
+          }
+        });
+        
+        this.scene.add(mesh);
+        this.backgroundNPCs.push({
+          mesh,
+          bobPhase: Math.random() * Math.PI * 2,
+          isCashier: false
+        });
+      }
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -356,7 +421,10 @@ export class World {
   // Sync the visible characters with the abstract queue array. Performs
   // smooth tweens on shifts and full add/remove of NPCs that join or leave.
   // -----------------------------------------------------------------------
-  syncQueue(queueArray) {
+  // frozenFromIdx: characters at this index and beyond will not have their
+  // targetPos updated (used during active events to freeze the player and
+  // everyone behind while the queue ahead continues to advance).
+  syncQueue(queueArray, frozenFromIdx = Infinity) {
     const seen = new Set();
 
     queueArray.forEach((npc, idx) => {
@@ -364,6 +432,7 @@ export class World {
       let mesh = this.characterMap.get(npc.id);
       if (!mesh) {
         mesh = buildCharacter(npc);
+        mesh.userData.isElderly = (npc.age === 'Elderly');
         this.characterMap.set(npc.id, mesh);
         this.charGroup.add(mesh);
         const queuePos = this.queuePosition(idx);
@@ -386,28 +455,30 @@ export class World {
                                                   : CONFIG.EVENT_NPC_WALK_IN_S;
           this.playScript(npc.id, [{ target: queuePos, durationS: walkInS }]);
         } else {
-          // Initial queue spawn — gentle lerp from back-of-line.
-          const startPos = this.queuePosition(queueArray.length + 1);
-          mesh.position.copy(startPos);
+          // Spawn directly at their target position to prevent characters with different speeds 
+          // from overtaking each other when the initial queue is generated.
+          mesh.position.copy(queuePos);
           mesh.userData.targetPos = queuePos;
         }
       } else {
-        mesh.userData.targetPos = this.queuePosition(idx);
+        if (frozenFromIdx !== Infinity && idx >= frozenFromIdx) {
+          // If frozen, keep their existing targetPos so they don't move forward
+          // while the person is picking up items
+          if (!mesh.userData.targetPos) {
+            mesh.userData.targetPos = this.queuePosition(idx);
+          }
+        } else {
+          const baseQueuePos = this.queuePosition(idx);
+          mesh.userData.targetPos = baseQueuePos;
+        }
       }
-      // Facing convention:
-      //   - In queue (idx > 0): body faces -Z (forward in line). Head NOT
-      //     turned — face stays on the body's natural front, aligned with
-      //     the pregnant belly / wheelchair / cane. This way the face wedge
-      //     in the hair sits exactly where the face is on the body.
-      //   - At cashier (idx 0): body faces -X (cashier counter); head turns
-      //     90° to the body's right so the face looks sideways out of the
-      //     cashier zone toward the camera (player can read emotions).
-      // Cashier customer: body faces the cashier counter (-X). Back is to the
-      // camera — natural "paying" pose, with pregnant belly / face / hair-free
-      // wedge all turned toward the counter.
-      // Queue customers: body faces forward in line (-Z). Head aligned.
-      mesh.userData.targetRotY = idx === 0 ? -Math.PI / 2 : Math.PI;
-      mesh.userData.targetHeadRotY = 0;
+      
+      mesh.userData.queueIdx = idx;
+
+      if (idx < frozenFromIdx) {
+        mesh.userData.targetRotY = idx === 0 ? -Math.PI / 2 : Math.PI;
+        mesh.userData.targetHeadRotY = 0;
+      }
     });
 
     // remove anyone who left the queue
@@ -422,11 +493,12 @@ export class World {
           }];
         } else {
           // Default "successful checkout" exit: step forward past the counter
-          // front edge first, THEN walk leftward off-camera. Without the first
-          // step the customer would walk straight through the counter mesh.
+          // front edge first, THEN walk forward beyond all queues, THEN walk left.
+          // This avoids passing through the background queues next door.
           exitSteps = [
             { target: new THREE.Vector3(CASHIER_X + 1.6, 0, 1.6), durationS: 0.7 },
-            { target: new THREE.Vector3(CASHIER_X - 4.5, 0, 1.6), durationS: 1.6 },
+            { target: new THREE.Vector3(CASHIER_X + 1.6, 0, 3.5), durationS: 0.8 },
+            { target: new THREE.Vector3(CASHIER_X - 6.0, 0, 3.5), durationS: 1.6 },
           ];
         }
         this.playScript(id, exitSteps, () => {
@@ -468,6 +540,10 @@ export class World {
     this.scanItems.push(item);
   }
 
+  setSpectatorFocus(focusId) {
+    this.spectatorFocusId = focusId;
+  }
+
   // -----------------------------------------------------------------------
   // Per-frame update: character tweens & scripted moves, gestures, scanner
   // pulse, conveyor scan items, dropped-grocery physics + recovery,
@@ -501,7 +577,19 @@ export class World {
       } else {
         const target = mesh.userData.targetPos;
         if (target) {
-          mesh.position.lerp(target, Math.min(1, dtSec * 3.5));
+          const dist = mesh.position.distanceTo(target);
+          if (dist > 0.05) {
+            mesh.userData.idleTimer = 0;
+            const speed = mesh.userData.isElderly ? 1.0 : 3.5;
+            mesh.position.lerp(target, Math.min(1, dtSec * speed));
+          } else {
+            mesh.userData.idleTimer = (mesh.userData.idleTimer || 0) + dtSec;
+            mesh.rotation.z = Math.sin(t * 0.4 + mesh.userData.bobPhase) * 0.03;
+            if (mesh.userData.idleTimer > 4.5 && Math.random() < 0.005) {
+                mesh.userData.idleTimer = 0;
+                mesh.userData.idleHeadOffset = (Math.random() - 0.5) * 0.5;
+            }
+          }
         }
         const bob = Math.sin(t * 1.6 + mesh.userData.bobPhase) * 0.02;
         mesh.position.y = bob;
@@ -537,7 +625,7 @@ export class World {
         const ageMs = nowMs - g.startMs;
         if (ageMs >= g.durationMs) {
           mesh.rotation.x = 0;
-          mesh.rotation.z = 0;
+          mesh.scale.y = 1; // Reset squash
           if (ra) { ra.rotation.x = ra.userData.baseRotX; ra.rotation.z = ra.userData.baseRotZ; }
           if (la) { la.rotation.x = la.userData.baseRotX; la.rotation.z = la.userData.baseRotZ; }
           delete mesh.userData.gesture;
@@ -581,14 +669,39 @@ export class World {
               ra.rotation.x = -0.45;
               ra.rotation.z = ra.userData.baseRotZ + Math.sin(phase * Math.PI * 4) * 0.4;
             }
+          } else if (g.kind === 'wave') {
+            if (ra) {
+              ra.rotation.x = -2.5; // raise arm high
+              ra.rotation.z = ra.userData.baseRotZ + Math.sin(phase * Math.PI * 8) * 0.5;
+            }
           } else if (g.kind === 'kneel') {
-            // Bend forward, hold, rise. Arms reach forward like picking up.
-            if (phase < 0.10)      mesh.rotation.x = (phase / 0.10) * 0.45;
-            else if (phase > 0.90) mesh.rotation.x = ((1 - phase) / 0.10) * 0.45;
-            else                   mesh.rotation.x = 0.45;
+            // Lean forward (negative x = head toward floor), hold, rise.
+            const dip = (phase < 0.12) ? (phase / 0.12) : (phase > 0.88) ? ((1 - phase) / 0.12) : 1;
+            mesh.rotation.x = -dip * 0.6;
+            // Squash vertically to fake bending knees
+            mesh.scale.y = 1 - dip * 0.3;
+            mesh.position.y = -dip * 0.24; // Move down to keep feet on the floor
             if (ra && la) {
-              ra.rotation.x = -0.65 + Math.sin(phase * Math.PI * 8) * 0.18;
-              la.rotation.x = -0.65;
+              // Arms hang slightly forward with small alternating grab motion.
+              const grab = Math.sin(phase * Math.PI * 6) * 0.22;
+              ra.rotation.x = -0.28 + grab;
+              la.rotation.x = -0.28 - grab;
+            }
+          } else if (g.kind === 'argue') {
+            // Sustained argument: slow body sway + forward lean + periodic arm jab.
+            // Deliberately slow (3–4 cycles) so it reads as intentional anger, not dancing.
+            mesh.rotation.x = -0.10 + Math.sin(phase * Math.PI * 3) * 0.06;
+            mesh.rotation.z = Math.sin(phase * Math.PI * 2.5 + 0.8) * 0.07;
+            if (ra) {
+              // Right arm: forward jabs — max(0,sin) so it only jabs forward, never back.
+              const jab = Math.max(0, Math.sin(phase * Math.PI * 4)) * 0.55;
+              ra.rotation.x = -0.40 - jab;
+              ra.rotation.z = ra.userData.baseRotZ - 0.22;
+            }
+            if (la) {
+              // Left arm: slight raise with mild sway.
+              la.rotation.x = -0.18 + Math.sin(phase * Math.PI * 2) * 0.12;
+              la.rotation.z = la.userData.baseRotZ + 0.18;
             }
           }
         }
@@ -633,11 +746,49 @@ export class World {
     // -- per-NPC head rotation: queue customers turn 90° "left" (face out of
     // the queue toward camera); the cashier customer turns 90° "right" (looks
     // sideways from the cashier). targetHeadRotY is set per-idx in syncQueue. --
-    for (const [, mesh] of this.characterMap.entries()) {
+    for (const [id, mesh] of this.characterMap.entries()) {
       const head = mesh.userData.headMesh;
       if (!head) continue;
-      const target = mesh.userData.targetHeadRotY ?? -Math.PI / 2;
+      let target = mesh.userData.targetHeadRotY ?? -Math.PI / 2;
+      
+      if (mesh.userData.idleHeadOffset) {
+         target += mesh.userData.idleHeadOffset;
+         mesh.userData.idleHeadOffset *= (1 - dtSec * 1.5);
+      }
+
+      if (this.spectatorFocusId && this.spectatorFocusId !== id) {
+          const focusMesh = this.characterMap.get(this.spectatorFocusId);
+          if (focusMesh && focusMesh.userData.queueIdx !== undefined && mesh.userData.queueIdx !== undefined) {
+              const distInQueue = Math.abs(focusMesh.userData.queueIdx - mesh.userData.queueIdx);
+              if (distInQueue <= 2) {
+                  const dir = new THREE.Vector3().subVectors(focusMesh.position, mesh.position);
+                  target = Math.atan2(dir.x, dir.z) - mesh.rotation.y;
+                  if (!mesh.userData.spectatorFaceSet) {
+                      mesh.userData.spectatorFaceSet = true;
+                      if (mesh.userData.emotion !== 'happy') {
+                          this.setEmotion(id, Math.random() < 0.5 ? 'neutral' : 'angry');
+                      }
+                  }
+              }
+          }
+      } else if (mesh.userData.spectatorFaceSet && !this.spectatorFocusId) {
+          mesh.userData.spectatorFaceSet = false;
+      }
       head.rotation.y += (target - head.rotation.y) * Math.min(1, dtSec * 5);
+    }
+
+    // -- background queues shoppers (static, subtle breathing & bobbing) --
+    for (const bg of (this.backgroundNPCs || [])) {
+      // Subtle breathing / bobbing
+      bg.mesh.position.y = Math.sin(t * 1.5 + bg.bobPhase) * 0.015;
+      
+      if (!bg.isCashier) {
+        // Subtle random head movement
+        const head = bg.mesh.userData.headMesh;
+        if (head) {
+          head.rotation.y = Math.sin(t * 0.8 + bg.bobPhase * 2) * 0.15;
+        }
+      }
     }
 
     // -- ambient background shoppers (random walk in the back area) --
@@ -669,7 +820,9 @@ export class World {
     for (let i = this.scanItems.length - 1; i >= 0; i--) {
       const it = this.scanItems[i];
       it.userData.t += dtSec;
-      it.position.x -= dtSec * 0.6;
+      if (!this.spectatorFocusId) {
+        it.position.x -= dtSec * 0.6;
+      }
       it.position.y = 1.18 + Math.sin(t * 5 + i) * 0.005;
       if (it.position.x < CASHIER_X - 0.8) {
         this.scene.remove(it);
@@ -775,6 +928,14 @@ export class World {
     const desiredTarget = new THREE.Vector3(focusX, 1.3, focusZ);
     const desiredBase   = new THREE.Vector3(focusX + ox, oy, focusZ + oz);
 
+    if (this.spectatorFocusId) {
+        const specMesh = this.characterMap.get(this.spectatorFocusId);
+        if (specMesh) {
+            desiredTarget.copy(specMesh.position);
+            desiredTarget.y += 1.0;
+        }
+    }
+
     this.cameraTarget.lerp(desiredTarget, Math.min(1, dtSec * 0.7));
     this.cameraBase.lerp(desiredBase, Math.min(1, dtSec * 0.7));
   }
@@ -789,7 +950,11 @@ export class World {
     if (!headPos) return [];
     const origin = headPos.clone();
     origin.y -= 0.5;
-    // bias scatter forward (toward camera) so they don't all hide behind the counter
+    
+    // Shift origin slightly forward (towards -Z) so they drop in front of the character,
+    // aligning perfectly with the forward-bending pickup animation.
+    origin.z -= 0.2;
+    
     const items = [];
     for (let i = 0; i < count; i++) {
       const mesh = buildGroceryItem();
@@ -798,9 +963,9 @@ export class World {
       const item = {
         mesh,
         physics: {
-          vx: (Math.random() - 0.4) * 1.6,
+          vx: (Math.random() - 0.5) * 1.4,
           vy: 1.0 + Math.random() * 0.7,
-          vz: (Math.random() * 0.8) + 0.3,
+          vz: (Math.random() - 0.5) * 0.6, // slight symmetric scatter around the new origin
           rotX: (Math.random() - 0.5) * 7,
           rotY: (Math.random() - 0.5) * 7,
           rotZ: (Math.random() - 0.5) * 7,
@@ -863,6 +1028,11 @@ export class World {
       startPos: mesh.position.clone(),
       onComplete,
     };
+  }
+
+  clearScript(npcId) {
+    const mesh = this.characterMap.get(npcId);
+    if (mesh) delete mesh.userData.script;
   }
 
   /** Trigger a brief gesture animation on a character ('shake', 'slump', 'point', 'head-shake', 'dismissive'). */
@@ -940,6 +1110,20 @@ export class World {
 
   render() {
     this.renderer.render(this.scene, this.camera);
+  }
+
+  getLegendData() {
+    return [
+      { profile: { age: 'Adult', state: 'Standard' }, label: 'Adult Customer', info: 'Standard queue member. Baseline walking speed and average patience.', actions: ['WAIT: Observe events'] },
+      { profile: { age: 'Youth', state: 'Standard' }, label: 'Youth', info: 'Smaller body proportions. Custom color palette. Narrative adapts to age when dropping items.', actions: ['WAIT: Observe events', 'HELP (if dropping): Gain 15pts, takes 4s'] },
+      { profile: { age: 'Elderly', state: 'Standard' }, label: 'Elderly', info: 'Walks very slowly. Creates natural bottlenecks. 40% slower event walk-in time.', actions: ['WAIT: Stand by', 'HELP (if dropping): Gain 25pts, takes 6s'] },
+      { profile: { age: 'Adult', state: 'BusyParent', forceBaby: true }, label: 'Busy Parent (Baby)', info: 'Holds a baby on their chest. Higher base drop chance. Slower recovery.', actions: ['WAIT', 'HELP (if dropping): Gain 20pts'] },
+      { profile: { age: 'Adult', state: 'BusyParent', forceToddler: true }, label: 'Busy Parent (Toddler)', info: 'Toddler stands beside them. Same stats as holding a baby variant.', actions: ['WAIT', 'HELP (if dropping): Gain 20pts'] },
+      { profile: { age: 'Adult', state: 'Pregnant' }, label: 'Pregnant Woman', info: 'Visible belly. Slightly slower movement.', actions: ['WAIT', 'HELP (if dropping): Gain 20pts'] },
+      { profile: { age: 'Adult', state: 'Disabled' }, label: 'Wheelchair User', info: 'Visually distinct with a wheelchair accessory.', actions: ['WAIT', 'HELP (if dropping): Gain 20pts'] },
+      { profile: { age: 'Adult', state: 'Aggressive' }, label: 'Aggressive Cutter', info: 'Sneaks in line abruptly. Has glowing red shoulders indicating hostility.', actions: ['ARGUE: Takes 5s, 60% chance they leave, 40% chance you lose 50pts', 'LET IT GO: Instant, lose your spot (-time)'] },
+      { profile: { age: 'Adult', state: 'FriendJoiner' }, label: 'Friend Joiner', info: 'Walks in to join a friend already in line. Magenta jacket.', actions: ['ARGUE: Takes 3s, 80% chance they leave', 'LET IT GO: Instant'] }
+    ];
   }
 
   triggerUrgentShake() { this.shake = 1.0; }
@@ -1025,7 +1209,7 @@ const PALETTE = {
 };
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-function buildCharacter(profile) {
+export function buildCharacter(profile) {
   const group = new THREE.Group();
   // Inner group: holds all body parts. Used for elderly stoop + scale,
   // leaving the outer group's transform clean for queue lerp / scripts / gestures.
@@ -1045,7 +1229,7 @@ function buildCharacter(profile) {
   // Body proportions — elderly slightly smaller as a baseline; the inner group
   // additionally scales them by 0.88 and tilts them forward into a stoop.
   let bodyR = 0.28, bodyH = 0.65, headR = 0.21, legH = 0.45;
-  if (profile.age === 'Youth')   { bodyR = 0.24; bodyH = 0.50; headR = 0.20; legH = 0.40; }
+  if (profile.age === 'Youth')   { bodyR = 0.18; bodyH = 0.40; headR = 0.22; legH = 0.30; }
   if (isElderly)                 { bodyR = 0.27; bodyH = 0.55; headR = 0.20; legH = 0.40; }
 
   // Legs
@@ -1064,6 +1248,16 @@ function buildCharacter(profile) {
   );
   body.position.y = legH + 0.05 + bodyH / 2 + bodyR * 0.6;
   body.castShadow = true;
+  
+  if (profile.age === 'Youth') {
+    const stripeColor = pick(palette.shirt.filter(c => c !== shirtColor)) || 0xffffff;
+    const stripe = new THREE.Mesh(
+      new THREE.CylinderGeometry(bodyR + 0.005, bodyR + 0.005, bodyH * 0.35, 12),
+      new THREE.MeshStandardMaterial({ color: stripeColor, roughness: 0.7 })
+    );
+    body.add(stripe);
+  }
+  
   inner.add(body);
 
   // Head with a CanvasTexture face (LEGO-like). Painted once at construction
@@ -1079,7 +1273,10 @@ function buildCharacter(profile) {
   // the group rotates the whole arm around the shoulder, letting us animate
   // realistic hand/arm gestures (point, wave, hands-on-hips, etc.) per event.
   const armMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.7 });
-  const shoulderY = body.position.y + bodyH / 2 - 0.10;
+  const shoulderY = body.position.y + bodyH / 2 + 0.15;
+  let armL = 0.55, armR = 0.10;
+  if (profile.age === 'Youth') { armL = 0.35; armR = 0.07; }
+
   for (const side of [-1, 1]) {
     const armGroup = new THREE.Group();
     armGroup.position.set(side * (bodyR + 0.10), shoulderY, 0);
@@ -1087,8 +1284,8 @@ function buildCharacter(profile) {
     armGroup.userData.baseRotX = 0;
     armGroup.userData.baseRotZ = side * 0.08;
 
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.10, 0.55, 4, 8), armMat);
-    arm.position.y = -0.38;
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(armR, armL, 4, 8), armMat);
+    arm.position.y = -armL / 2;
     arm.castShadow = true;
     armGroup.add(arm);
 
@@ -1133,6 +1330,10 @@ function buildCharacter(profile) {
 
   // Wheelchair
   if (profile.state === 'Disabled') {
+    // Angle the legs so they start at the bottom of the body and rest on the ground in front
+    legs.position.set(0, 0.34, 0.32); // raised significantly higher
+    legs.rotation.x = -0.17; // ~10 degrees forward tilt (80 deg from ground)
+
     const seat = new THREE.Mesh(
       new THREE.BoxGeometry(0.55, 0.10, 0.55),
       new THREE.MeshStandardMaterial({ color: 0x2a2a44, roughness: 0.6 })
@@ -1157,15 +1358,65 @@ function buildCharacter(profile) {
     }
   }
 
-  // Busy parent: small kid in tow
+  // Busy parent: small kid in tow OR holding a baby
   if (profile.state === 'BusyParent') {
-    const kid = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.12, 0.18, 4, 8),
-      new THREE.MeshStandardMaterial({ color: 0xff9aa2, roughness: 0.7 })
-    );
-    kid.position.set(0.34, 0.45, 0);
-    kid.castShadow = true;
-    inner.add(kid);
+    if (profile.forceBaby || (!profile.forceToddler && Math.random() < 0.5)) {
+      // Holding baby
+      const baby = new THREE.Group();
+      const bBody = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.08, 0.20, 4, 8),
+        new THREE.MeshStandardMaterial({ color: 0xff9aa2, roughness: 0.7 })
+      );
+      bBody.castShadow = true;
+      const bFaceData = createFaceTexture(skinHex, { age: 'Youth' });
+      const bHeadMat = new THREE.MeshStandardMaterial({ map: bFaceData.texture, roughness: 0.6 });
+      const bHead = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), bHeadMat);
+      bHead.position.set(0, 0.15, 0);
+      // The baby is rotated horizontally. Rotate Y by 75 degrees so the face points UP 
+      // and slightly FORWARD towards the camera so it is clearly visible.
+      bHead.rotation.set(0, Math.PI / 2.4, 0);
+      bHead.castShadow = true;
+      baby.add(bBody, bHead);
+      
+      baby.userData.faceData = bFaceData;
+      baby.userData.skinHex = skinHex;
+      group.userData.babyMesh = baby;
+      
+      // Raise arms and fold inward to cradle
+      if (group.userData.leftArm && group.userData.rightArm) {
+          const armRotX = -0.55; // lift arms a bit more forward
+
+          // Lower the shoulders slightly so the whole arm is lower
+          group.userData.leftArm.position.y -= 0.05;
+          group.userData.rightArm.position.y -= 0.05;
+          const armRotZLeft = 0.8; // swing left arm inward
+          const armRotZRight = -0.8; // swing right arm inward
+          
+          group.userData.leftArm.rotation.order = 'ZYX';
+          group.userData.rightArm.rotation.order = 'ZYX';
+          
+          group.userData.leftArm.rotation.set(armRotX, 0, armRotZLeft);
+          group.userData.rightArm.rotation.set(armRotX, 0, armRotZRight);
+          
+          // lock base rots so idle sway doesn't ruin it
+          group.userData.leftArm.userData.baseRotX = armRotX;
+          group.userData.leftArm.userData.baseRotZ = armRotZLeft;
+          group.userData.rightArm.userData.baseRotX = armRotX;
+          group.userData.rightArm.userData.baseRotZ = armRotZRight;
+      }
+      
+      // Position cradled on hands
+      baby.position.set(0, body.position.y + 0.16, bodyR + 0.03); // baby sitting exactly on hands
+      baby.rotation.z = Math.PI / 2.2; // lying horizontally, slight tilt up
+      baby.rotation.x = -0.2; // leaning against chest
+      inner.add(baby);
+    } else {
+      // Kid in tow
+      const kid = buildCharacter({ age: 'Youth', gender: Math.random() < 0.5 ? 'M' : 'F' });
+      kid.position.set(0.40, 0, 0.25); // moved forward
+      kid.scale.setScalar(0.7);
+      inner.add(kid);
+    }
   }
 
   // Aggressive cutter — red emissive shoulders
@@ -1321,7 +1572,7 @@ function createFaceTexture(skinHex, profile) {
   return { canvas: c, ctx, texture: tex };
 }
 
-function paintFace(ctx, skinHex, emotion, profile) {
+export function paintFace(ctx, skinHex, emotion, profile) {
   ctx.fillStyle = skinHex;
   ctx.fillRect(0, 0, 512, 256);
   // Single face at canvas (128, 124) — corresponds to the sphere's local +Z
@@ -1503,3 +1754,5 @@ function makeSignTexture(text) {
   g.fillText(text, c.width / 2, c.height / 2);
   return new THREE.CanvasTexture(c);
 }
+
+

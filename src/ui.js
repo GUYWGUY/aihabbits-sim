@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { mturk, enableDevMode } from './mturk.js';
+import { initLegendScreen } from './legend.js';
 
 // ============================================================================
 // HUD layer: builds the DOM overlay, manages screens (intro / end / preview),
@@ -85,6 +86,7 @@ export class UI {
 
       <div class="screen" id="introScreen"></div>
       <div class="screen" id="endScreen"></div>
+      <div class="screen" id="legendScreen"></div>
     `;
 
     this.scoreEl = document.getElementById('scoreText');
@@ -143,6 +145,7 @@ export class UI {
           <div class="stat"><span>Initial position</span><strong>~#${Math.round((CONFIG.INITIAL_QUEUE_LEN_RANGE[0] + CONFIG.INITIAL_QUEUE_LEN_RANGE[1]) / 2 + 1)} in line</strong></div>
           <div style="margin-top:auto; display:flex; gap:8px; flex-wrap:wrap;">
             <button id="startBtn" class="btn" disabled>▶ Start Simulation</button>
+            <button id="legendBtn" class="btn" style="display:none; font-size:12px;">🔍 View 3D Legend</button>
           </div>
           <div id="previewNotice" class="notice" style="display:none">
             <div class="badge">PREVIEW MODE</div>
@@ -159,6 +162,13 @@ export class UI {
     document.getElementById('startBtn').addEventListener('click', () => {
       el.classList.remove('active');
       this.onStart();
+    });
+    document.getElementById('legendBtn').addEventListener('click', () => {
+      el.classList.remove('active');
+      document.getElementById('legendScreen').classList.add('active');
+      initLegendScreen(this.world, () => {
+        el.classList.add('active');
+      });
     });
     const dev = document.getElementById('devBtn');
     if (dev) {
@@ -213,16 +223,19 @@ export class UI {
   _wireMode() {
     const startBtn = document.getElementById('startBtn');
     const previewNotice = document.getElementById('previewNotice');
+    const legendBtn = document.getElementById('legendBtn');
     if (mturk.isPreview) {
       this.modePillEl.classList.add('warn');
       this.modeTextEl.textContent = 'Preview Mode';
       if (previewNotice) previewNotice.style.display = 'block';
       if (startBtn) startBtn.disabled = true;
+      if (legendBtn) legendBtn.style.display = 'none';
     } else {
       this.modePillEl.classList.remove('warn');
       this.modeTextEl.textContent = mturk.devMode ? '🛠️ Dev Mode' : 'Ready';
       if (previewNotice) previewNotice.style.display = 'none';
       if (startBtn) startBtn.disabled = false;
+      if (legendBtn) legendBtn.style.display = mturk.devMode ? 'inline-block' : 'none';
     }
   }
 
@@ -320,6 +333,41 @@ export class UI {
     setTimeout(() => el.remove(), ttlMs);
   }
 
+  /** Anger-styled (red) speech bubble with a random curse symbol string. */
+  curse(npcId, ttlMs = 1800) {
+    const CURSES = ['%@#!!', '#$@!', '@#$%!', '!@#$%', '*@#!!', '#%@$!', '!@#!!'];
+    const text = CURSES[Math.floor(Math.random() * CURSES.length)];
+    const headPos = npcId === 'CASHIER'
+      ? this.world.getCashierHeadPos()
+      : this.world.getCharacterHeadPos(npcId);
+    if (!headPos) return;
+    const el = document.createElement('div');
+    el.className = 'speech curse';
+    el.textContent = text;
+    this.root.appendChild(el);
+    this.anchors.push({ kind: 'speech', vec3: headPos, el, ttlMs, currentMs: 0, npcId });
+    setTimeout(() => el.remove(), ttlMs);
+  }
+
+  /** Bobbing anger emoji above a character's head for the duration of an argument. */
+  angerIcon(npcId, ttlMs = 3000) {
+    const ICONS = ['💢', '⚡', '💢', '⚡', '😤'];
+    const icon = ICONS[Math.floor(Math.random() * ICONS.length)];
+    const headPos = npcId === 'CASHIER'
+      ? this.world.getCashierHeadPos()
+      : this.world.getCharacterHeadPos(npcId);
+    if (!headPos) return;
+    const el = document.createElement('div');
+    el.className = 'anger-icon';
+    el.textContent = icon;
+    this.root.appendChild(el);
+    this.anchors.push({
+      kind: 'speech', vec3: headPos, el, ttlMs, currentMs: 0, npcId,
+      yOffset3D: 0.55,
+    });
+    setTimeout(() => el.remove(), ttlMs);
+  }
+
   /**
    * Per-frame: re-project anchored DOM elements onto screen-space.
    * Speech bubbles re-resolve their npc head every frame (queue may shift).
@@ -341,6 +389,7 @@ export class UI {
       } else {
         v = a.vec3;
       }
+      if (a.yOffset3D) v = v.clone().setY(v.y + a.yOffset3D);
       const screen = this.world.projectToScreen(v);
       a.el.style.left = screen.x + 'px';
       a.el.style.top = screen.y + 'px';

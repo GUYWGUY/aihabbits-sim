@@ -33,33 +33,41 @@ const ui = new UI({
 // kick off the render loop immediately so the scene is live behind the intro
 animate();
 
+let loopCrashed = false;
 function animate() {
+  if (loopCrashed) return;
   requestAnimationFrame(animate);
   const now = performance.now();
   const dtMs = now - lastFrameMs;
   lastFrameMs = now;
   const dtSec = dtMs / 1000;
 
-  if (started && !gs.finished) {
-    tickAccumulatorMs += dtMs;
-    while (tickAccumulatorMs >= CONFIG.TICK_MS) {
-      gameTick(CONFIG.TICK_MS);
-      tickAccumulatorMs -= CONFIG.TICK_MS;
+  try {
+    if (started && !gs.finished) {
+      tickAccumulatorMs += dtMs;
+      while (tickAccumulatorMs >= CONFIG.TICK_MS) {
+        gameTick(CONFIG.TICK_MS);
+        tickAccumulatorMs -= CONFIG.TICK_MS;
+      }
     }
-  }
 
-  // visual scan items spawn while a customer is being scanned
-  if (started && !gs.finished && gs.cashierProgressMs > 0) {
-    scanItemAccumulatorMs += dtMs;
-    if (scanItemAccumulatorMs > 2200) {
-      world.spawnScanItem();
-      scanItemAccumulatorMs = 0;
+    // visual scan items spawn while a customer is being scanned
+    if (started && !gs.finished && gs.cashierProgressMs > 0) {
+      scanItemAccumulatorMs += dtMs;
+      if (scanItemAccumulatorMs > 2200) {
+        world.spawnScanItem();
+        scanItemAccumulatorMs = 0;
+      }
     }
-  }
 
-  world.update(dtSec);
-  ui.updateAnchors(dtMs);
-  world.render();
+    world.update(dtSec);
+    ui.updateAnchors(dtMs);
+    world.render();
+  } catch (err) {
+    loopCrashed = true;
+    console.error("CRASH IN ANIMATE LOOP:", err);
+    ui.log("⚠️ CRASH IN RENDERING LOOP: " + (err.stack || err.message), "bad");
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -84,8 +92,23 @@ function gameTick(dtMs) {
       endGame('CHECKOUT_COMPLETE');
       return;
     }
-    // sync world (NPC exits, queue shifts)
-    world.syncQueue(gs.queue);
+    // sync world: during an active event freeze the affected section of the
+    // queue so only characters ahead of the blockage advance.
+    // DROP: freeze from the dropper's position (they block their own spot).
+    // Other events: freeze from the player's position.
+    let frozenFromIdx = Infinity;
+    if (gs.activeEvent) {
+      if (gs.activeEvent.type === 'DROP') {
+        const dropperIdx = gs.queue.findIndex(n => n.id === gs.activeEvent.npc.id);
+        frozenFromIdx = dropperIdx >= 0 ? dropperIdx : Infinity;
+      } else if (gs.activeEvent.type === 'ISRAELI_QUEUE') {
+        const friendIdx = gs.queue.findIndex(n => n.id === gs.activeEvent.friend.id);
+        frozenFromIdx = friendIdx >= 0 ? friendIdx : gs.playerIndex();
+      } else {
+        frozenFromIdx = gs.playerIndex();
+      }
+    }
+    world.syncQueue(gs.queue, frozenFromIdx);
     gs.startNextCustomerAtCashier();
   }
 

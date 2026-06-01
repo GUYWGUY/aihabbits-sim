@@ -41,7 +41,8 @@ export class EventEngine {
 
   maybeTrigger() {
     if (this.gs.activeEvent) {
-      if (this.gs.elapsedSec - this.gs.activeEvent.startedAt >= 10) {
+      if (!this.gs.activeEvent.resolving &&
+          this.gs.elapsedSec - this.gs.activeEvent.startedAt >= 10) {
         const type = this.gs.activeEvent.type;
         if (type === 'DROP') this.resolveDrop('DO_NOTHING');
         else if (type === 'CUTTER') this.resolveCutter('LET_IT_GO');
@@ -108,6 +109,7 @@ export class EventEngine {
     };
 
     this.activeDroppedItems = this.world.dropGroceriesAt(at.id, 5);
+    this.world.setSpectatorFocus(at.id);
     this.world.gestureCharacter(at.id, 'slump', 1500);
     this.world.setEmotion(at.id, 'shocked');
     this.world.setEmotion('PLAYER', 'surprised');
@@ -131,44 +133,59 @@ export class EventEngine {
     const items = this.activeDroppedItems || [];
     let delaySec, logKind, msg;
 
+    // Prevent the 10s auto-timeout from firing a second time while we animate.
+    this.gs.activeEvent.resolving = true;
+
     if (action === 'HELP') {
       delaySec = CONFIG.HELP_DELAY_S;
       logKind = 'good';
       msg = `✋ You helped pick everything up. (-${delaySec}s wait${isAtCashier ? '' : ', no cashier delay'})`;
 
-      // VISUAL: walk to the dropper's actual location (not a fixed drop site),
-      // kneel through the entire pickup, then walk back to the (possibly
-      // updated) queue spot.
       const dropperPos = this.world.getCharacterPos(customer.id);
       const playerStart = this.world.getCharacterPos('PLAYER');
-      let walkS = 1.2;
       let helperPos;
       if (dropperPos && playerStart) {
         helperPos = new THREE.Vector3(dropperPos.x + 0.55, 0, dropperPos.z + 0.45);
-        // ~0.45s per metre of walk distance, clamped 1.0–2.6s
-        const dist = playerStart.distanceTo(helperPos);
-        walkS = Math.max(1.0, Math.min(2.6, dist * 0.45));
       } else {
         helperPos = this.world.getDropSitePos();
       }
 
+      // Bypass lane to the right of the queue (queue is at x≈0.4, chars ~0.28 wide).
+      const BYPASS_X = 1.85;
+      const SPEED = 1 / 0.45; // units per second (matches original formula)
+
+      // Walk-to path: step right → walk forward in bypass lane → approach dropper.
+      const wp1 = new THREE.Vector3(BYPASS_X, 0, (playerStart || helperPos).z);
+      const wp2 = new THREE.Vector3(BYPASS_X, 0, helperPos.z);
+      const walkToSteps = [
+        { target: wp1,       durationS: (playerStart || helperPos).distanceTo(wp1) / SPEED },
+        { target: wp2,       durationS: wp1.distanceTo(wp2) / SPEED },
+        { target: helperPos, durationS: wp2.distanceTo(helperPos) / SPEED },
+      ];
+
       this.world.setEmotion('PLAYER', 'neutral');
-      this.world.playScript('PLAYER', [
-        { target: helperPos, durationS: walkS },
-      ], () => {
-        // Player kneels for the entire pickup duration.
-        const totalRecoverMs = this.world.recoverItemsToNpc(items, customer.id, 1100, 1300);
+      this.world.playScript('PLAYER', walkToSteps, () => {
+        // Arrived — start item recovery and kneel for the full duration.
+        const totalRecoverMs = items.length * 1100 + 1300 + 200;
+        this.world.recoverItemsToNpc(items, customer.id, 1100, 1300);
         this.world.gestureCharacter('PLAYER', 'kneel', totalRecoverMs);
-        // Customer recovers emotion partway through.
         setTimeout(() => this.world.setEmotion(customer.id, 'happy'), totalRecoverMs * 0.55);
-        // Walk back to current queue position once items are all returned.
-        setTimeout(() => {
-          const idx = this.gs.playerIndex();
-          if (idx < 0) return;
-          const back = this.world.queuePosition(idx);
-          this.world.playScript('PLAYER', [{ target: back, durationS: walkS }]);
-        }, totalRecoverMs);
+
+        // Compute queue position now (frozen during event, safe to read here).
+        const idx = this.gs.playerIndex();
+        const back = this.world.queuePosition(idx >= 0 ? idx : 1);
+
+        // Return path: step right → walk back in bypass lane → re-enter queue.
+        const bp1 = new THREE.Vector3(BYPASS_X, 0, helperPos.z);
+        const bp2 = new THREE.Vector3(BYPASS_X, 0, back.z);
+        this.world.playScript('PLAYER', [
+          { target: helperPos, durationS: totalRecoverMs / 1000 }, // stay in place
+          { target: bp1,  durationS: helperPos.distanceTo(bp1) / SPEED },
+          { target: bp2,  durationS: bp1.distanceTo(bp2) / SPEED },
+          { target: back, durationS: bp2.distanceTo(back) / SPEED },
+        ], () => this._finishEvent(action, prevState));
       });
+
     } else if (action === 'COMPLAIN') {
       delaySec = CONFIG.COMPLAIN_DELAY_S;
       logKind = 'warn';
@@ -178,32 +195,37 @@ export class EventEngine {
       this.world.setEmotion(customer.id, 'sad');
       this.world.gestureCharacter('PLAYER', 'shake', 1500);
       this.ui.speech('PLAYER', 'Oh come on!');
+      // Dropper kneels slightly after the player's complaint reaction.
+      const recoverMsComplain = items.length * 1300 + 1100 + 200;
       setTimeout(() => {
         this.world.gestureCharacter(customer.id, 'kneel', 5000);
         this.world.recoverItemsToNpc(items, customer.id, 1300, 1100);
       }, 800);
+      // Finish only after the dropper has collected everything.
+      setTimeout(() => this._finishEvent(action, prevState), 800 + recoverMsComplain);
+
     } else {
+      // DO_NOTHING
       delaySec = CONFIG.DO_NOTHING_DELAY_S;
       logKind = 'info';
       msg = `😶 You waited silently while the customer recovered. (-${delaySec}s)`;
 
       this.world.setEmotion('PLAYER', 'neutral');
       this.world.setEmotion(customer.id, 'sad');
+      const recoverMsDoNothing = items.length * 2100 + 1400 + 200;
       setTimeout(() => {
         this.world.gestureCharacter(customer.id, 'kneel', 9000);
         this.world.recoverItemsToNpc(items, customer.id, 2100, 1400);
       }, 1000);
+      setTimeout(() => this._finishEvent(action, prevState), 1000 + recoverMsDoNothing);
     }
 
-    // The cashier-delay penalty only applies when the drop is actually
-    // holding up the cashier (i.e., the dropper is at idx 0). Otherwise
-    // the cost is just the player's time-bleed during the visual.
+    // Cashier penalty only when the dropper is blocking the front of queue.
     if (isAtCashier) {
       this.gs.addCashierDelay(delaySec);
     }
     this.ui.log(msg, logKind);
     this.activeDroppedItems = null;
-    this._finishEvent(action, prevState);
   }
 
   // =======================================================================
@@ -248,6 +270,7 @@ export class EventEngine {
     this.world.setEmotion(cutter.id, aggressive ? 'angry' : 'neutral');
     this.world.setEmotion('PLAYER', 'shocked');
     this.world.setCashierEmotion('surprised');
+    this.world.setSpectatorFocus(cutter.id);
     setTimeout(() => this.world.setCashierEmotion('neutral'), 4000);
     this.ui.renderActions(this.gs.activeEvent.options, (key) => this.resolveCutter(key));
     this.world.triggerUrgentShake();
@@ -267,30 +290,34 @@ export class EventEngine {
 
       this.world.setEmotion('PLAYER', 'angry');
       this.world.setEmotion(cutter.id, 'angry');
-      this.world.gestureCharacter('PLAYER', 'shake', argDurationMs);
-      this.world.gestureCharacter(cutter.id, 'shake', argDurationMs);
+      this.world.gestureCharacter('PLAYER', 'argue', argDurationMs);
+      this.world.gestureCharacter(cutter.id, 'argue', argDurationMs);
 
-      // Face each other for the whole argument (override the queue rotation
-      // so the cutter actually turns around to face the player, not stay
-      // facing forward in line).
       this.world.faceTowards('PLAYER', cutter.id);
       this.world.faceTowards(cutter.id, 'PLAYER');
 
-      // Pin both in place — queue ahead of them advances while they yell;
-      // they fill the gap when the argument ends.
       const playerPos = this.world.getCharacterPos('PLAYER');
       const cutterPos = this.world.getCharacterPos(cutter.id);
       if (playerPos) this.world.playScript('PLAYER',  [{ target: playerPos.clone(),  durationS: argDurationS }]);
       if (cutterPos) this.world.playScript(cutter.id, [{ target: cutterPos.clone(), durationS: argDurationS }]);
 
-      // Speech beats spread across the duration so it really FEELS like a
-      // multi-second argument and not a one-line resolve.
+      // Sustained anger icons above both heads for the whole argument.
+      this.ui.angerIcon('PLAYER', argDurationMs);
+      this.ui.angerIcon(cutter.id, argDurationMs);
+
+      // Speech + curse bubbles interleaved so the argument has texture.
       this.ui.speech('PLAYER', 'Hey — the line is here!', 1800);
-      const t1 = Math.min(argDurationMs * 0.30, 1600);
-      const t2 = Math.min(argDurationMs * 0.55, 3200);
-      const t3 = Math.min(argDurationMs * 0.80, 5500);
+      setTimeout(() => this.ui.curse(cutter.id, 1600), 500);
+
+      const t1  = Math.min(argDurationMs * 0.30, 1600);
+      const t2  = Math.min(argDurationMs * 0.55, 3200);
+      const t3  = Math.min(argDurationMs * 0.80, 5500);
+      const tc1 = Math.min(argDurationMs * 0.42, 2400);
+      const tc2 = Math.min(argDurationMs * 0.68, 4600);
       setTimeout(() => this.ui.speech(cutter.id, success ? 'I just need a few things…' : 'I was already here!'), t1);
+      setTimeout(() => this.ui.curse('PLAYER', 1500), tc1);
       setTimeout(() => this.ui.speech('PLAYER', success ? 'No, you really need to wait.' : 'That\'s not how a queue works!'), t2);
+      setTimeout(() => this.ui.curse(cutter.id, 1500), tc2);
       if (argDurationMs > 4500) {
         setTimeout(() => this.ui.speech(cutter.id, success ? 'Ugh, fine…' : 'Whatever, I\'m staying.'), t3);
       }
@@ -303,6 +330,7 @@ export class EventEngine {
       );
 
       setTimeout(() => {
+        this.world.setSpectatorFocus(null);
         // Release the rotation overrides so they revert to queue rotation.
         this.world.clearRotationOverride('PLAYER');
         this.world.clearRotationOverride(cutter.id);
@@ -311,13 +339,38 @@ export class EventEngine {
           this.world.setEmotion(cutter.id, 'sad');
           this.world.setEmotion('PLAYER', 'neutral');
           this.ui.speech(cutter.id, '...fine.');
-          this.world.setCustomExit(cutter.id, new THREE.Vector3(4.0, 0, 4.5), 1.6);
-          this.gs.removeById(cutter.id);
+          this.gs.sendToBack(cutter);
+          
+          const currentPos = this.world.getCharacterPos(cutter.id);
+          const backPos = this.world.queuePosition(this.gs.queue.length - 1);
+          if (currentPos) {
+            this.world.playScript(cutter.id, [
+              { target: new THREE.Vector3(3.5, 0, currentPos.z), durationS: 0.8 },
+              { target: new THREE.Vector3(3.5, 0, backPos.z), durationS: Math.max(1, (backPos.z - currentPos.z) * 0.3) },
+              { target: backPos, durationS: 0.8 }
+            ]);
+          }
           this.world.syncQueue(this.gs.queue);
-          this.ui.log(`✅ The cutter backed off after ${argDurationS.toFixed(1)}s of arguing.`, 'good');
+          
+          // Social Contagion: npc behind player is happy
+          const pIdx = this.gs.playerIndex();
+          if (pIdx >= 0 && pIdx + 1 < this.gs.queue.length) {
+            const behindId = this.gs.queue[pIdx + 1].id;
+            this.world.setEmotion(behindId, 'happy');
+            this.world.gestureCharacter(behindId, 'kneel', 600);
+          }
+          this.ui.log(`✅ The cutter backed off to the end of the line after ${argDurationS.toFixed(1)}s.`, 'good');
         } else {
           this.world.gestureCharacter(cutter.id, 'dismissive', 900);
           this.world.setEmotion(cutter.id, 'happy'); // smug
+          
+          // Social Contagion: npc behind player is frustrated
+          const pIdx = this.gs.playerIndex();
+          if (pIdx >= 0 && pIdx + 1 < this.gs.queue.length) {
+            const behindId = this.gs.queue[pIdx + 1].id;
+            this.world.setEmotion(behindId, 'sad');
+            this.world.gestureCharacter(behindId, 'head-shake', 1200);
+          }
           this.ui.log(`💢 ${argDurationS.toFixed(1)}s of shouting and they stayed.`, 'bad');
         }
         this._finishEvent(action, prevState);
@@ -326,10 +379,19 @@ export class EventEngine {
     }
 
     // LET_IT_GO — cutter stays; player slumps in resignation.
+    this.world.setSpectatorFocus(null);
     this.world.setEmotion('PLAYER', 'sad');
     this.world.setEmotion(cutter.id, 'happy'); // smug
     this.world.gestureCharacter('PLAYER', 'slump', 1400);
     this.ui.speech('PLAYER', '*sigh*');
+    
+    // Social contagion
+    const pIdx = this.gs.playerIndex();
+    if (pIdx >= 0 && pIdx + 1 < this.gs.queue.length) {
+      const behindId = this.gs.queue[pIdx + 1].id;
+      this.world.setEmotion(behindId, 'angry');
+      this.world.gestureCharacter(behindId, 'head-shake', 1500);
+    }
     this.ui.log(
       `🙏 You said nothing. The cutter stays — you'll wait through their full cycle (~${CONFIG.CASHIER_MEAN_S}s extra).`,
       'warn'
@@ -373,12 +435,14 @@ export class EventEngine {
     };
 
     this.ui.banner(`⚠️ "${inFront.label}" called a friend over: "I saved you a spot!"`);
+    this.world.gestureCharacter(inFront.id, 'wave', 2500);
     this.ui.log(`${inFront.label} called over a friend who jumped into the line in front of you.`, 'bad');
     this.ui.speech(inFront.id, 'I saved you a spot!');
     this.world.setEmotion(inFront.id, 'happy');
     this.world.setEmotion(friend.id, 'happy'); // smug
     this.world.setEmotion('PLAYER', 'shocked');
     this.world.setCashierEmotion('surprised');
+    this.world.setSpectatorFocus(friend.id);
     setTimeout(() => this.world.setCashierEmotion('neutral'), 4000);
     this.ui.renderActions(this.gs.activeEvent.options, (key) => this.resolveIsraeliQueue(key));
     this.world.triggerUrgentShake();
@@ -388,7 +452,6 @@ export class EventEngine {
     if (!this.gs.activeEvent) return;
     const prevState = this.gs.snapshotState();
     const friend = this.gs.activeEvent.friend;
-    const inFront = this.gs.activeEvent.npc;
 
     if (action === 'OBJECT_TO_GROUP') {
       this.gs.addCashierDelay(CONFIG.OBJECT_GROUP_S);
@@ -399,31 +462,37 @@ export class EventEngine {
 
       this.world.setEmotion('PLAYER', 'angry');
       this.world.setEmotion(friend.id, 'angry');
-      this.world.gestureCharacter('PLAYER', 'point', objectDurationMs * 0.5);
-      this.world.gestureCharacter(friend.id, 'shake', objectDurationMs * 0.5);
+      this.world.setEmotion(this.gs.activeEvent.npc.id, 'angry');
+      this.world.gestureCharacter('PLAYER', 'argue', objectDurationMs * 0.5);
+      this.world.gestureCharacter(friend.id, 'argue', objectDurationMs * 0.5);
 
-      // Face each other.
       this.world.faceTowards('PLAYER', friend.id);
       this.world.faceTowards(friend.id, 'PLAYER');
 
-      // Pin them in place for the duration of the dispute.
       const playerPos = this.world.getCharacterPos('PLAYER');
       const friendPos = this.world.getCharacterPos(friend.id);
       const argS = objectDurationMs / 1000;
       if (playerPos) this.world.playScript('PLAYER',   [{ target: playerPos.clone(),  durationS: argS }]);
       if (friendPos) this.world.playScript(friend.id,  [{ target: friendPos.clone(), durationS: argS }]);
 
-      // Speech beats
+      this.ui.angerIcon('PLAYER', objectDurationMs * 0.7);
+      this.ui.angerIcon(friend.id, objectDurationMs * 0.7);
+
       this.ui.speech('PLAYER', 'You can\'t just cut in!', 1900);
+      setTimeout(() => this.ui.curse(friend.id, 1600), 600);
       setTimeout(() => this.ui.speech(friend.id, 'My friend saved my spot!'), Math.min(1500, objectDurationMs * 0.32));
+      setTimeout(() => this.ui.curse('PLAYER', 1500), Math.min(2300, objectDurationMs * 0.48));
       setTimeout(() => this.ui.speech('PLAYER', 'That\'s not how this works.'), Math.min(3000, objectDurationMs * 0.60));
 
       this.ui.banner(`💬 Objecting to the friend… (~${argS.toFixed(0)}s)`);
       this.ui.renderLockedAction(`💬 Arguing… (~${argS.toFixed(0)}s)`);
 
       setTimeout(() => {
+        this.world.setSpectatorFocus(null);
         this.world.clearRotationOverride('PLAYER');
         this.world.clearRotationOverride(friend.id);
+        this.world.clearScript('PLAYER');
+        this.world.clearScript(friend.id);
 
         if (success) {
           this.world.setEmotion(friend.id, 'sad');
@@ -431,11 +500,34 @@ export class EventEngine {
           this.world.gestureCharacter(friend.id, 'dismissive', 700);
           this.ui.speech(friend.id, 'Whatever, fine.');
           this.gs.sendToBack(friend);
+          
+          const currentPos = this.world.getCharacterPos(friend.id);
+          const backPos = this.world.queuePosition(this.gs.queue.length - 1);
+          if (currentPos) {
+            this.world.playScript(friend.id, [
+              { target: new THREE.Vector3(3.5, 0, currentPos.z), durationS: 0.8 },
+              { target: new THREE.Vector3(3.5, 0, backPos.z), durationS: Math.max(1, (backPos.z - currentPos.z) * 0.3) },
+              { target: backPos, durationS: 0.8 }
+            ]);
+          }
           this.world.syncQueue(this.gs.queue);
+          
+          const pIdx = this.gs.playerIndex();
+          if (pIdx >= 0 && pIdx + 1 < this.gs.queue.length) {
+            const behindId = this.gs.queue[pIdx + 1].id;
+            this.world.setEmotion(behindId, 'happy');
+          }
           this.ui.log(`✅ You objected and the friend went to the back of the line.`, 'good');
         } else {
           this.world.gestureCharacter(friend.id, 'head-shake', 800);
           this.ui.speech(friend.id, 'I\'m not moving.');
+          
+          const pIdx = this.gs.playerIndex();
+          if (pIdx >= 0 && pIdx + 1 < this.gs.queue.length) {
+            const behindId = this.gs.queue[pIdx + 1].id;
+            this.world.setEmotion(behindId, 'sad');
+            this.world.gestureCharacter(behindId, 'slump', 1100);
+          }
           this.ui.log(`😒 You argued but they ignored you. (-${CONFIG.OBJECT_GROUP_S}s wasted)`, 'bad');
         }
         this._finishEvent(action, prevState);
@@ -461,6 +553,7 @@ export class EventEngine {
       }, 2400);
       setTimeout(() => {
         this.world.setEmotion(friend.id, 'sad');
+        this.world.setEmotion(this.gs.activeEvent.npc.id, 'sad');
         this.ui.speech(friend.id, 'But my friend was holding…', 2000);
       }, 4400);
       setTimeout(() => {
@@ -470,7 +563,18 @@ export class EventEngine {
         this.world.gestureCharacter(friend.id, 'slump', 900);
         this.ui.speech(friend.id, 'OK OK, fine.', 1500);
         this.gs.sendToBack(friend);
+        
+        const currentPos = this.world.getCharacterPos(friend.id);
+        const backPos = this.world.queuePosition(this.gs.queue.length - 1);
+        if (currentPos) {
+          this.world.playScript(friend.id, [
+            { target: new THREE.Vector3(3.5, 0, currentPos.z), durationS: 0.8 },
+            { target: new THREE.Vector3(3.5, 0, backPos.z), durationS: Math.max(1, (backPos.z - currentPos.z) * 0.3) },
+            { target: backPos, durationS: 0.8 }
+          ]);
+        }
         this.world.syncQueue(this.gs.queue);
+        this.world.setSpectatorFocus(null);
       }, 7400);
       setTimeout(() => this.world.setCashierEmotion('neutral'), 9500);
 
@@ -480,8 +584,16 @@ export class EventEngine {
       );
     } else {
       // WAIT — friend stays directly in front of player.
+      this.world.setSpectatorFocus(null);
       this.world.setEmotion('PLAYER', 'sad');
       this.world.gestureCharacter('PLAYER', 'slump', 1100);
+      
+      const pIdx = this.gs.playerIndex();
+      if (pIdx >= 0 && pIdx + 1 < this.gs.queue.length) {
+        const behindId = this.gs.queue[pIdx + 1].id;
+        this.world.setEmotion(behindId, 'angry');
+        this.world.gestureCharacter(behindId, 'head-shake', 1500);
+      }
       this.ui.log('😐 You waited. The friend stays directly in front of you.', 'warn');
     }
 
@@ -494,6 +606,9 @@ export class EventEngine {
   _finishEvent(action, prevState) {
     this.gs.decisionsCount++;
     this.gs.activeEvent = null;
+    this.world.setSpectatorFocus(null); // Release camera focus
+    // Catch up anyone who was frozen during the event (player + behind).
+    this.world.syncQueue(this.gs.queue);
     this.ui.clearBanner();
     this.ui.renderDefaultActions();
     this.onAction(action, prevState, this.gs.points, 0);
