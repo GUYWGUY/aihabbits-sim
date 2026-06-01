@@ -30,6 +30,10 @@ const ui = new UI({
   onDownload: handleDownload,
 });
 
+// Initialize the queue immediately on load so characters are visible behind the intro
+gs.buildInitialQueue();
+world.syncQueue(gs.queue);
+
 let loopCrashed = false;
 
 // kick off the render loop immediately so the scene is live behind the intro
@@ -163,8 +167,7 @@ function recordEventAction(action, prevState, points, immediatePenalty) {
 // Lifecycle
 // ----------------------------------------------------------------------------
 function startGame() {
-  // build state
-  gs.buildInitialQueue();
+  // Reset game state statistics but keep the queue that was built on load
   gs.points = CONFIG.INITIAL_POINTS;
   gs.elapsedMs = 0;
   gs.elapsedSec = 0;
@@ -174,7 +177,6 @@ function startGame() {
   gs.activeEvent = null;
   traj.init(CONFIG.INITIAL_POINTS);
 
-  world.syncQueue(gs.queue);
   gs.startNextCustomerAtCashier();
 
   eventEngine = new EventEngine({

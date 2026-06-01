@@ -42,8 +42,8 @@ export class World {
     );
     // Camera framing: focus the corridor "player → cashier"; NPCs further back
     // than the player are deliberately framed out of view.
-    this.cameraBase = new THREE.Vector3(5.0, 4.4, 7.5);
-    this.cameraTarget = new THREE.Vector3(-0.6, 1.3, 2.0);
+    this.cameraBase = new THREE.Vector3(5.0, 0.4, 7.5);    // Starts low for a cinematic rising reveal
+    this.cameraTarget = new THREE.Vector3(-0.6, 0.4, 2.0);  // Looking forward/slightly up
     this.cameraOffset = new THREE.Vector3(5.6, 4.4, 5.5); // base = focus + offset
     this.camera.position.copy(this.cameraBase);
     this.camera.lookAt(this.cameraTarget);

@@ -38,7 +38,7 @@ export class UI {
         <div class="brand">
           <div class="logo">🛒</div>
           <div>
-            <div class="title">Checkout Queue Behavioral Study</div>
+            <div class="title">Queueing Line Simulation</div>
             <div class="sub">Real-pace 3D simulation · MTurk HIT</div>
           </div>
         </div>
@@ -122,8 +122,8 @@ export class UI {
           <h1>Stand in line. Make decisions. Earn points.</h1>
           <p>You play one customer in a busy supermarket queue. Time costs points
           (you bleed <strong>1 point per second</strong>). Other customers will sometimes do
-          annoying or surprising things — each interruption forces you to choose.
-          Your choices and how fast you make them are the data.</p>
+          surprising things — each interruption forces you to choose.
+          Your goal is to reach the cashier and finish checking out with as many points as possible.</p>
 
           <ul class="rules">
             <li><span class="ico">⏱️</span><div><strong>Endowment:</strong> ${CONFIG.INITIAL_POINTS} points. Your final score becomes the MTurk bonus.</div></li>
