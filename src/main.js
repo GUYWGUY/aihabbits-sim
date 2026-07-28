@@ -84,7 +84,7 @@ function gameTick(dtMs) {
   gs.elapsedSec = gs.elapsedMs / 1000;
 
   // safety cap
-  if (gs.elapsedSec >= CONFIG.MAX_DURATION_S) {
+  if (gs.gameMode !== 'SOCIAL_NORMS' && gs.elapsedSec >= CONFIG.MAX_DURATION_S) {
     endGame('TIMEOUT');
     return;
   }
@@ -144,6 +144,8 @@ function gameTick(dtMs) {
     qlen: gs.queue.length,
     cashPct: gs.cashierProgressPct(),
     decisions: gs.decisionsCount,
+    gameMode: gs.gameMode,
+    eventsCount: gs.eventsCount,
   });
 
   if (gs.points <= 100 && Math.random() < 0.02) ui.flashScore();
@@ -166,7 +168,8 @@ function recordEventAction(action, prevState, points, immediatePenalty) {
 // ----------------------------------------------------------------------------
 // Lifecycle
 // ----------------------------------------------------------------------------
-function startGame() {
+function startGame(mode = 'REALTIME') {
+  gs.gameMode = mode;
   // Reset game state statistics but keep the queue that was built on load
   gs.points = CONFIG.INITIAL_POINTS;
   gs.elapsedMs = 0;
@@ -178,16 +181,22 @@ function startGame() {
   traj.init(CONFIG.INITIAL_POINTS);
 
   gs.startNextCustomerAtCashier();
+  gs.initialInFront = gs.playerIndex();
 
   eventEngine = new EventEngine({
     gameState: gs,
     world,
     ui,
     onAction: recordEventAction,
+    onEndGame: endGame,
   });
 
   ui.renderDefaultActions();
-  ui.log(`🛒 Simulation started. You're #${gs.playerPosition()} in line. Good luck!`, 'good');
+  if (gs.gameMode === 'SOCIAL_NORMS') {
+    ui.log(`🛒 Experiment started (Social Norms Mode). You will face 20 scenarios. Take your time to decide.`, 'good');
+  } else {
+    ui.log(`🛒 Simulation started. You're #${gs.playerPosition()} in line. Good luck!`, 'good');
+  }
 
   // initial INIT trajectory entry
   traj.record({
@@ -199,6 +208,12 @@ function startGame() {
   });
 
   started = true;
+
+  if (gs.gameMode === 'SOCIAL_NORMS') {
+    setTimeout(() => {
+      eventEngine.triggerRandomEvent();
+    }, 1500);
+  }
 }
 
 function endGame(reason) {
@@ -223,13 +238,19 @@ function endGame(reason) {
     },
   });
 
-  ui.log(`🏁 ${reason === 'TIMEOUT' ? 'Time cap reached.' : 'Checkout complete!'}`, 'good');
+  if (reason === 'COMPLETED_SOCIAL_NORMS') {
+    ui.log(`🏁 Experiment complete! All 20 scenarios resolved.`, 'good');
+  } else {
+    ui.log(`🏁 ${reason === 'TIMEOUT' ? 'Time cap reached.' : 'Checkout complete!'}`, 'good');
+  }
+
   ui.showEndScreen({
     finalScore: Math.round(gs.points),
     totalTimeSec: gs.elapsedSec,
     decisions: gs.decisionsCount,
     events: gs.eventsCount,
     trajLen: traj.entries.length,
+    gameMode: gs.gameMode,
   });
 }
 

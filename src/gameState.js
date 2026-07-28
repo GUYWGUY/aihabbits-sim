@@ -60,6 +60,7 @@ function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
 // ============================================================================
 export class GameState {
   constructor() {
+    this.gameMode = 'REALTIME'; // 'REALTIME' or 'SOCIAL_NORMS'
     this.queue = [];        // index 0 = at cashier, last = back of line
     this.points = CONFIG.INITIAL_POINTS;
     this.elapsedMs = 0;
@@ -97,6 +98,9 @@ export class GameState {
 
   /** Returns { customerFinished, customerObj } when a customer completes checkout. */
   advanceCashier(dtMs) {
+    if (this.gameMode === 'SOCIAL_NORMS') {
+      return { customerFinished: false };
+    }
     if (this.activeEvent && this.activeEvent.blocksCheckout) {
       return { customerFinished: false };
     }
@@ -109,6 +113,7 @@ export class GameState {
   }
 
   cashierProgressPct() {
+    if (this.gameMode === 'SOCIAL_NORMS') return 0;
     const total = Math.max(1, this.cashierTotalMs + this.cashierExtraMs);
     return Math.min(100, (this.cashierProgressMs / total) * 100);
   }
@@ -128,6 +133,7 @@ export class GameState {
   }
 
   bleedPoints(dtMs) {
+    if (this.gameMode === 'SOCIAL_NORMS') return;
     this.points -= (CONFIG.TIME_PENALTY_PER_SEC * dtMs) / 1000;
     if (this.points < 0) this.points = 0;
   }

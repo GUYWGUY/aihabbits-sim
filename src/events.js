@@ -29,17 +29,19 @@ export class EventEngine {
    * @param {object} args.ui
    * @param {(action: string, prevState, points, immediatePenalty?) => void} args.onAction
    */
-  constructor({ gameState, world, ui, onAction }) {
+  constructor({ gameState, world, ui, onAction, onEndGame }) {
     this.gs = gameState;
     this.world = world;
     this.ui = ui;
     this.onAction = onAction;
+    this.onEndGame = onEndGame;
 
     this.nextCheckSec = CONFIG.EVENT_FIRST_AT_S;
     this.activeDroppedItems = null;
   }
 
   maybeTrigger() {
+    if (this.gs.gameMode === 'SOCIAL_NORMS') return;
     if (this.gs.activeEvent) {
       if (!this.gs.activeEvent.resolving &&
           this.gs.elapsedSec - this.gs.activeEvent.startedAt >= 10) {
@@ -59,11 +61,29 @@ export class EventEngine {
     if (this.gs.playerPosition() <= 1) return;
     if (Math.random() > CONFIG.EVENT_PROB) return;
 
+    this.triggerRandomEvent();
+  }
+
+  triggerRandomEvent() {
+    if (this.gs.finished) return;
+
     const choices = ['DROP', 'CUTTER', 'ISRAELI_QUEUE'];
     const t = choices[Math.floor(Math.random() * choices.length)];
-    if (t === 'DROP') this.triggerDrop();
-    else if (t === 'CUTTER') this.triggerCutter();
-    else this.triggerIsraeliQueue();
+
+    if (t === 'DROP') {
+      this.triggerDrop();
+    } else if (t === 'CUTTER') {
+      this.triggerCutter();
+    } else {
+      // For Israeli Queue, we need a character in front of the player.
+      // If none, fallback to DROP.
+      const playerIdx = this.gs.playerIndex();
+      if (playerIdx > 0 && this.gs.queue[playerIdx - 1] && !this.gs.queue[playerIdx - 1].isPlayer) {
+        this.triggerIsraeliQueue();
+      } else {
+        this.triggerDrop();
+      }
+    }
   }
 
   // =======================================================================
@@ -613,5 +633,44 @@ export class EventEngine {
     this.ui.renderDefaultActions();
     this.onAction(action, prevState, this.gs.points, 0);
     setTimeout(() => this.world.setEmotion('PLAYER', 'neutral'), 5000);
+
+    if (this.gs.gameMode === 'SOCIAL_NORMS') {
+      const initialInFront = this.gs.initialInFront || 0;
+      const eventIndex = this.gs.eventsCount;
+
+      const prevExpected = Math.floor(((eventIndex - 1) * initialInFront) / 20);
+      const currExpected = Math.floor((eventIndex * initialInFront) / 20);
+      const shouldAdvance = currExpected > prevExpected;
+
+      if (shouldAdvance && this.gs.queue.length > 0 && !this.gs.queue[0].isPlayer) {
+        this.gs.queue.shift();
+        this.gs.startNextCustomerAtCashier();
+        this.world.syncQueue(this.gs.queue);
+        this.ui.log(`🚶 The customer ahead of you finished paying. The queue advances!`, 'good');
+      }
+
+      if (this.gs.eventsCount >= 20) {
+        // Clear all characters in in-front of the player so they reach the cashier
+        while (this.gs.queue.length > 0 && !this.gs.queue[0].isPlayer) {
+          this.gs.queue.shift();
+        }
+        this.gs.startNextCustomerAtCashier();
+        this.world.syncQueue(this.gs.queue);
+
+        setTimeout(() => {
+          this.ui.showConfetti();
+          this.ui.banner("🎉 Congratulations! You reached the cashier.");
+          this.ui.log("🎉 You reached the cashier! Checkout complete.", "good");
+        }, 1000);
+
+        setTimeout(() => {
+          if (this.onEndGame) this.onEndGame('COMPLETED_SOCIAL_NORMS');
+        }, 4500);
+      } else {
+        setTimeout(() => {
+          this.triggerRandomEvent();
+        }, 2500);
+      }
+    }
   }
 }

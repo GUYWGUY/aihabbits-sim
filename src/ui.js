@@ -58,7 +58,7 @@ export class UI {
               <div class="score" id="scoreText">${CONFIG.INITIAL_POINTS}</div>
             </div>
             <div style="text-align:right">
-              <div class="stat-label">Elapsed</div>
+              <div class="stat-label" id="elapsedLabel">Elapsed</div>
               <div style="font-size:22px; font-weight:700;" id="timeText">0s</div>
             </div>
           </div>
@@ -114,34 +114,42 @@ export class UI {
   // Intro screen with rules, stats, and start / dev-mode buttons.
   // -----------------------------------------------------------------------
   _buildIntroScreen() {
+    this.selectedMode = 'REALTIME';
     const el = document.getElementById('introScreen');
     el.classList.add('active');
     el.innerHTML = `
       <div class="card glass two-col">
         <div>
-          <h1>Stand in line. Make decisions. Earn points.</h1>
-          <p>You play one customer in a busy supermarket queue. Time costs points
-          (you bleed <strong>1 point per second</strong>). Other customers will sometimes do
-          surprising things — each interruption forces you to choose.
-          Your goal is to reach the cashier and finish checking out with as many points as possible.</p>
+          <h1>Stand in line. Make decisions.</h1>
+          <p>You play one customer in a busy supermarket queue. Select your experiment mode below to begin.</p>
 
-          <ul class="rules">
-            <li><span class="ico">⏱️</span><div><strong>Endowment:</strong> ${CONFIG.INITIAL_POINTS} points. Your final score becomes the MTurk bonus.</div></li>
-            <li><span class="ico">🐢</span><div><strong>Real pace:</strong> the simulation runs in real-time (~5 minutes typical).</div></li>
-            <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
-            <li><span class="ico">⚡</span><div><strong>Events:</strong> drops, cutters, group joiners. React via the action panel.</div></li>
-            <li><span class="ico">🏁</span><div><strong>Goal:</strong> reach the cashier and finish checking out with as many points as possible.</div></li>
+          <h2 style="margin-top:20px; margin-bottom:10px; font-size:16px; font-weight:700; color:#fff;">Select Experiment Mode:</h2>
+          <div class="mode-cards">
+            <div class="mode-card active" id="modeRealtimeCard">
+              <div class="mode-card-title">⏱️ Real-Pace Simulation</div>
+              <div class="mode-card-desc">Stand in line, make real-time decisions. The cashier processes customers. Time costs points (1 pt/sec). ~5 min.</div>
+            </div>
+            <div class="mode-card" id="modeSocialNormsCard">
+              <div class="mode-card-title">🙋 Social Norms Mode</div>
+              <div class="mode-card-desc">Focus strictly on social norms. 20 consecutive random events with no time pressure, no timers, and no point bleeding.</div>
+            </div>
+          </div>
+
+          <ul class="rules" style="margin-top:20px;">
+            <li><span class="ico">⏱️</span><div><strong>Goal:</strong> Reach the cashier or complete all scenarios with as many points as possible.</div></li>
+            <li><span class="ico">🐢</span><div><strong>Social feedback:</strong> Other customers will do unexpected things — each interruption forces you to choose.</div></li>
+            <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
           </ul>
-          <div class="legend">
+          <div class="legend" style="margin-top:15px;">
             <span>👵 Elderly</span><span>🤰 Pregnant</span><span>♿ Disabled</span><span>🧑 Adult</span><span>🧒 Youth</span>
           </div>
         </div>
         <aside class="aside">
           <h3>Session Parameters</h3>
           <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
-          <div class="stat"><span>Time penalty</span><strong>−${CONFIG.TIME_PENALTY_PER_SEC} / sec</strong></div>
-          <div class="stat"><span>Avg. checkout time</span><strong>${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})</strong></div>
-          <div class="stat"><span>Approx. duration</span><strong>~5 min (max 10)</strong></div>
+          <div class="stat"><span>Time penalty</span><strong id="paramTimePenalty">−${CONFIG.TIME_PENALTY_PER_SEC} / sec</strong></div>
+          <div class="stat"><span>Avg. checkout time</span><strong id="paramCheckoutTime">${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})</strong></div>
+          <div class="stat"><span>Approx. duration</span><strong id="paramDuration">~5 min (max 10)</strong></div>
           <div class="stat"><span>Initial position</span><strong>~#${Math.round((CONFIG.INITIAL_QUEUE_LEN_RANGE[0] + CONFIG.INITIAL_QUEUE_LEN_RANGE[1]) / 2 + 1)} in line</strong></div>
           <div style="margin-top:auto; display:flex; gap:8px; flex-wrap:wrap;">
             <button id="startBtn" class="btn" disabled>▶ Start Simulation</button>
@@ -159,9 +167,35 @@ export class UI {
       </div>
     `;
 
+    const realtimeCard = document.getElementById('modeRealtimeCard');
+    const socialNormsCard = document.getElementById('modeSocialNormsCard');
+    const paramTimePenalty = document.getElementById('paramTimePenalty');
+    const paramCheckoutTime = document.getElementById('paramCheckoutTime');
+    const paramDuration = document.getElementById('paramDuration');
+
+    const updateModeSelection = (mode) => {
+      this.selectedMode = mode;
+      if (mode === 'REALTIME') {
+        realtimeCard.classList.add('active');
+        socialNormsCard.classList.remove('active');
+        paramTimePenalty.textContent = `−${CONFIG.TIME_PENALTY_PER_SEC} / sec`;
+        paramCheckoutTime.textContent = `${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})`;
+        paramDuration.textContent = '~5 min (max 10)';
+      } else {
+        realtimeCard.classList.remove('active');
+        socialNormsCard.classList.add('active');
+        paramTimePenalty.textContent = 'None';
+        paramCheckoutTime.textContent = 'N/A (Static cashier)';
+        paramDuration.textContent = '20 events (No timer)';
+      }
+    };
+
+    realtimeCard.addEventListener('click', () => updateModeSelection('REALTIME'));
+    socialNormsCard.addEventListener('click', () => updateModeSelection('SOCIAL_NORMS'));
+
     document.getElementById('startBtn').addEventListener('click', () => {
       el.classList.remove('active');
-      this.onStart();
+      this.onStart(this.selectedMode);
     });
     document.getElementById('legendBtn').addEventListener('click', () => {
       el.classList.remove('active');
@@ -192,7 +226,7 @@ export class UI {
         <p style="text-align:center;">Final points (will be converted to your MTurk bonus)</p>
         <div class="end-grid">
           <div class="glass">
-            <div class="stat-label">Total Time</div>
+            <div class="stat-label" id="endTimeLabel">Total Time</div>
             <div class="num" id="endTime">—</div>
           </div>
           <div class="glass">
@@ -239,9 +273,15 @@ export class UI {
     }
   }
 
-  showEndScreen({ finalScore, totalTimeSec, decisions, events, trajLen }) {
+  showEndScreen({ finalScore, totalTimeSec, decisions, events, trajLen, gameMode }) {
     document.getElementById('finalScoreText').textContent = finalScore;
-    document.getElementById('endTime').textContent = totalTimeSec.toFixed(1) + 's';
+    if (gameMode === 'SOCIAL_NORMS') {
+      document.getElementById('endTimeLabel').textContent = 'Total Scenarios';
+      document.getElementById('endTime').textContent = events + ' / 20';
+    } else {
+      document.getElementById('endTimeLabel').textContent = 'Total Time';
+      document.getElementById('endTime').textContent = totalTimeSec.toFixed(1) + 's';
+    }
     document.getElementById('endDecisions').textContent = decisions;
     document.getElementById('endEvents').textContent = events;
     document.getElementById('endTrajLen').textContent = trajLen;
@@ -251,9 +291,15 @@ export class UI {
   // -----------------------------------------------------------------------
   // Stats panel updates.
   // -----------------------------------------------------------------------
-  updateStats({ score, time, position, qlen, cashPct, decisions }) {
+  updateStats({ score, time, position, qlen, cashPct, decisions, gameMode, eventsCount }) {
     this.scoreEl.textContent = Math.round(score);
-    this.timeEl.textContent = time.toFixed(1) + 's';
+    if (gameMode === 'SOCIAL_NORMS') {
+      document.getElementById('elapsedLabel').textContent = 'Scenarios';
+      this.timeEl.textContent = `${eventsCount} / 20`;
+    } else {
+      document.getElementById('elapsedLabel').textContent = 'Elapsed';
+      this.timeEl.textContent = time.toFixed(1) + 's';
+    }
     this.posEl.textContent =
       position === -1 ? '—' :
       position === 1 ? 'At Cashier' : '#' + position + ' in line';
@@ -432,5 +478,60 @@ export class UI {
     b.textContent = label;
     b.style.gridColumn = '1 / -1';
     this.actionGridEl.appendChild(b);
+  }
+
+  showConfetti() {
+    const container = document.createElement('div');
+    container.style.position = 'absolute';
+    container.style.top = '0';
+    container.style.left = '0';
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.pointerEvents = 'none';
+    container.style.overflow = 'hidden';
+    container.style.zIndex = '9999';
+    document.body.appendChild(container);
+
+    const colors = ['#f2d53c', '#eb6383', '#fa9191', '#a29bfe', '#74b9ff', '#55efc4', '#ffeaa7'];
+
+    for (let i = 0; i < 150; i++) {
+      const p = document.createElement('div');
+      p.style.position = 'absolute';
+      p.style.width = Math.random() * 8 + 4 + 'px';
+      p.style.height = Math.random() * 10 + 6 + 'px';
+      p.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+      p.style.left = Math.random() * 100 + 'vw';
+      p.style.top = -20 + 'px';
+      p.style.borderRadius = '2px';
+      p.style.transform = `rotate(${Math.random() * 360}deg)`;
+      container.appendChild(p);
+
+      const speed = Math.random() * 3 + 2;
+      const angle = Math.random() * 2 - 1; // drift
+      let top = -20;
+      let left = parseFloat(p.style.left);
+      let rot = Math.random() * 360;
+
+      const anim = () => {
+        top += speed;
+        left += angle;
+        rot += 5;
+        p.style.top = top + 'px';
+        p.style.left = left + 'px';
+        p.style.transform = `rotate(${rot}deg)`;
+
+        if (top < window.innerHeight) {
+          requestAnimationFrame(anim);
+        } else {
+          p.remove();
+        }
+      };
+      requestAnimationFrame(anim);
+    }
+
+    // Clean up container after 5 seconds
+    setTimeout(() => {
+      container.remove();
+    }, 5000);
   }
 }
