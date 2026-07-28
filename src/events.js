@@ -67,8 +67,15 @@ export class EventEngine {
   triggerRandomEvent() {
     if (this.gs.finished) return;
 
-    const choices = ['DROP', 'CUTTER', 'ISRAELI_QUEUE'];
-    const t = choices[Math.floor(Math.random() * choices.length)];
+    let t;
+    if (this.gs.gameMode === 'SOCIAL_NORMS' && this.gs.eventSequence) {
+      t = this.gs.eventSequence[this.gs.eventsCount];
+    } else {
+      const choices = ['DROP', 'CUTTER', 'ISRAELI_QUEUE'];
+      t = choices[Math.floor(Math.random() * choices.length)];
+    }
+
+    if (!t) t = 'DROP';
 
     if (t === 'DROP') {
       this.triggerDrop();
@@ -104,16 +111,23 @@ export class EventEngine {
       : (dropperIdx === this.gs.playerIndex() - 1
           ? 'right in front of you'
           : `a few places ahead in line`);
-    let flavor;
+    let actorStr = 'customer';
     if (at.age === 'Elderly') {
-      flavor = `An elderly person ${where} dropped their groceries.`;
+      actorStr = '<strong>elderly person</strong>';
     } else if (at.age === 'Youth') {
-      flavor = `A young customer ${where} fumbled and dropped their items.`;
+      actorStr = '<strong>young customer</strong>';
     } else if (at.state === 'Pregnant') {
-      flavor = `A pregnant woman ${where} dropped her groceries.`;
+      actorStr = '<strong>pregnant woman</strong>';
+    } else if (at.state === 'Disabled') {
+      actorStr = '<strong>disabled customer</strong>';
+    } else if (at.state === 'BusyParent') {
+      actorStr = '<strong>parent with a child</strong>';
     } else {
-      flavor = `A customer ${where} dropped their groceries.`;
+      actorStr = '<strong>customer</strong>';
     }
+
+    const actionStr = '<strong>dropped their groceries</strong>';
+    const flavor = `A ${actorStr} ${where} ${actionStr}.`;
 
     this.gs.activeEvent = {
       type: 'DROP',
@@ -284,8 +298,8 @@ export class EventEngine {
       ],
     };
 
-    this.ui.banner(`⚠️ A "${cutter.label}" is cutting directly in front of you.`);
-    this.ui.log(`A ${cutter.label.toLowerCase()} cut into the queue right in front of you.`, 'bad');
+    this.ui.banner(`⚠️ A "<strong>${cutter.label}</strong>" is <strong>cutting directly in front of you</strong>.`);
+    this.ui.log(`A <strong>${cutter.label.toLowerCase()}</strong> <strong>cut into the queue</strong> right in front of you.`, 'bad');
     this.ui.speech(cutter.id, aggressive ? "I'm in a rush!" : 'Was I next?');
     this.world.setEmotion(cutter.id, aggressive ? 'angry' : 'neutral');
     this.world.setEmotion('PLAYER', 'shocked');
@@ -454,9 +468,9 @@ export class EventEngine {
       ],
     };
 
-    this.ui.banner(`⚠️ "${inFront.label}" called a friend over: "I saved you a spot!"`);
+    this.ui.banner(`⚠️ "<strong>${inFront.label}</strong>" called a <strong>friend to jump ahead</strong>: "I saved you a spot!"`);
     this.world.gestureCharacter(inFront.id, 'wave', 2500);
-    this.ui.log(`${inFront.label} called over a friend who jumped into the line in front of you.`, 'bad');
+    this.ui.log(`<strong>${inFront.label}</strong> called over a friend who <strong>jumped into the line</strong> in front of you.`, 'bad');
     this.ui.speech(inFront.id, 'I saved you a spot!');
     this.world.setEmotion(inFront.id, 'happy');
     this.world.setEmotion(friend.id, 'happy'); // smug
@@ -638,15 +652,22 @@ export class EventEngine {
       const initialInFront = this.gs.initialInFront || 0;
       const eventIndex = this.gs.eventsCount;
 
-      const prevExpected = Math.floor(((eventIndex - 1) * initialInFront) / 20);
-      const currExpected = Math.floor((eventIndex * initialInFront) / 20);
-      const shouldAdvance = currExpected > prevExpected;
+      const targetInFront = (eventIndex >= 20)
+        ? 0
+        : Math.max(1, initialInFront - Math.floor((eventIndex * (initialInFront - 1)) / 19));
 
-      if (shouldAdvance && this.gs.queue.length > 0 && !this.gs.queue[0].isPlayer) {
+      let currentInFront = this.gs.playerIndex();
+      let advancedCount = 0;
+      while (currentInFront > targetInFront && this.gs.queue.length > 0 && !this.gs.queue[0].isPlayer) {
         this.gs.queue.shift();
+        advancedCount++;
+        currentInFront = this.gs.playerIndex();
+      }
+
+      if (advancedCount > 0) {
         this.gs.startNextCustomerAtCashier();
         this.world.syncQueue(this.gs.queue);
-        this.ui.log(`🚶 The customer ahead of you finished paying. The queue advances!`, 'good');
+        this.ui.log(`🚶 The queue advanced. (${advancedCount} customer(s) checked out)`, 'good');
       }
 
       if (this.gs.eventsCount >= 20) {

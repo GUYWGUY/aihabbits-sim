@@ -319,7 +319,7 @@ export class UI {
   // Event banner + log + speech bubble + floating text.
   // -----------------------------------------------------------------------
   banner(text) {
-    this.bannerTextEl.textContent = text;
+    this.bannerTextEl.innerHTML = text;
     this.bannerEl.classList.add('show');
     this.vignetteEl.classList.add('active');
   }
@@ -335,7 +335,9 @@ export class UI {
     t.className = 'time';
     t.textContent = `[${(this.world.clock.getElapsedTime()).toFixed(1)}s]`;
     p.appendChild(t);
-    p.appendChild(document.createTextNode(' ' + message));
+    const span = document.createElement('span');
+    span.innerHTML = ' ' + message;
+    p.appendChild(span);
     this.logEl.appendChild(p);
     this.logEl.scrollTop = this.logEl.scrollHeight;
   }

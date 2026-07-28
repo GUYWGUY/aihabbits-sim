@@ -166,6 +166,30 @@ function recordEventAction(action, prevState, points, immediatePenalty) {
 }
 
 // ----------------------------------------------------------------------------
+function generateEventSequence(length) {
+  const sequence = [];
+  const types = ['DROP', 'CUTTER', 'ISRAELI_QUEUE'];
+  let lastType = null;
+  const counts = { DROP: 0, CUTTER: 0, ISRAELI_QUEUE: 0 };
+  const targetCount = Math.ceil(length / 3);
+
+  for (let i = 0; i < length; i++) {
+    let candidates = types.filter(t => counts[t] < targetCount && t !== lastType);
+    if (candidates.length === 0) {
+      candidates = types.filter(t => t !== lastType);
+    }
+    if (candidates.length === 0) {
+      candidates = types;
+    }
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    sequence.push(chosen);
+    counts[chosen]++;
+    lastType = chosen;
+  }
+  return sequence;
+}
+
+// ----------------------------------------------------------------------------
 // Lifecycle
 // ----------------------------------------------------------------------------
 function startGame(mode = 'REALTIME') {
@@ -182,6 +206,9 @@ function startGame(mode = 'REALTIME') {
 
   gs.startNextCustomerAtCashier();
   gs.initialInFront = gs.playerIndex();
+  if (gs.gameMode === 'SOCIAL_NORMS') {
+    gs.eventSequence = generateEventSequence(20);
+  }
 
   eventEngine = new EventEngine({
     gameState: gs,
