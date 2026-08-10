@@ -118,7 +118,16 @@ export default async function handler(req, res) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(row),
       });
-      result.sheet = sheetRes.ok ? 'ok' : `failed (HTTP ${sheetRes.status})`;
+      // Apps Script answers 200 even when it rejects the write (e.g. a secret
+      // mismatch), so the status alone is not enough — read the body.
+      const sheetBody = await sheetRes.json().catch(() => null);
+      if (!sheetRes.ok) {
+        result.sheet = `failed (HTTP ${sheetRes.status})`;
+      } else if (sheetBody && sheetBody.ok === false) {
+        result.sheet = `failed (${sheetBody.error || 'rejected by webhook'})`;
+      } else {
+        result.sheet = 'ok';
+      }
     } catch (err) {
       result.sheet = 'failed';
       result.sheet_error = err?.message || String(err);
