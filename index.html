@@ -1,41 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script>
-    window.onerror = function(message, source, lineno, colno, error) {
-      const div = document.createElement('div');
-      div.style.position = 'fixed';
-      div.style.top = '0';
-      div.style.left = '0';
-      div.style.width = '100%';
-      div.style.background = 'rgba(255,0,0,0.9)';
-      div.style.color = 'white';
-      div.style.padding = '20px';
-      div.style.zIndex = '999999';
-      div.style.fontFamily = 'monospace';
-      div.style.whiteSpace = 'pre-wrap';
-      div.innerHTML = '<h2>🚨 GLOBAL ERROR:</h2>' + message + '<br>at ' + source + ':' + lineno + ':' + colno + (error ? '<br><br>' + error.stack : '');
-      document.body.appendChild(div);
-    };
-    window.onunhandledrejection = function(event) {
-      const div = document.createElement('div');
-      div.style.position = 'fixed';
-      div.style.top = '0';
-      div.style.left = '0';
-      div.style.width = '100%';
-      div.style.background = 'rgba(255,0,0,0.9)';
-      div.style.color = 'white';
-      div.style.padding = '20px';
-      div.style.zIndex = '999999';
-      div.style.fontFamily = 'monospace';
-      div.style.whiteSpace = 'pre-wrap';
-      div.innerHTML = '<h2>🚨 UNHANDLED REJECTION:</h2>' + event.reason;
-      document.body.appendChild(div);
-    };
-  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Queueing Line Simulation</title>
+  <title>Queueing Line Simulation — Experiments</title>
+  <meta name="robots" content="noindex" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -43,41 +12,143 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="./src/styles.css" />
 
-  <!-- ES module importmap so we don't need a build step for development.
-       The Vite build step inlines these properly for production. -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  <style>
+    :root {
+      --bg-0: #0b1020;
+      --bg-1: #131845;
+      --glass: rgba(15, 18, 45, 0.55);
+      --glass-border: rgba(255, 255, 255, 0.16);
+      --text: #eef1ff;
+      --text-dim: #a8b0d8;
+      --accent: #7c5cff;
+      --accent-2: #29d4c4;
+      --radius: 14px;
     }
-  }
-  </script>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 700px at 15% -10%, var(--bg-1), transparent 60%),
+        radial-gradient(900px 600px at 110% 110%, #2a1f5e, transparent 60%),
+        var(--bg-0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 20px;
+    }
+    .wrap { width: 100%; max-width: 880px; }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+    .logo {
+      width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+      font-size: 22px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    }
+    h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+    .sub { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+    .lede { color: var(--text-dim); font-size: 14.5px; line-height: 1.65; margin: 0 0 24px; }
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+    .card {
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 22px;
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(16px) saturate(140%);
+      -webkit-backdrop-filter: blur(16px) saturate(140%);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      text-decoration: none;
+      color: inherit;
+      transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(124, 92, 255, 0.6);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+    }
+    .card h2 { margin: 0; font-size: 17px; font-weight: 700; }
+    .card p { margin: 0; color: var(--text-dim); font-size: 13.5px; line-height: 1.6; }
+    .meta { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+    .meta li {
+      display: flex; justify-content: space-between; gap: 10px;
+      font-size: 12px; color: var(--text-dim);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px; padding: 6px 10px;
+    }
+    .meta strong { color: var(--text); font-weight: 600; }
+    .go {
+      margin-top: auto; padding-top: 12px;
+      font-size: 13px; font-weight: 700; color: var(--accent-2);
+    }
+    .path {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; color: var(--text-dim);
+    }
+    footer { margin-top: 26px; color: var(--text-dim); font-size: 12px; line-height: 1.7; }
+    footer code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(255,255,255,.07); border: 1px solid var(--glass-border);
+      border-radius: 6px; padding: 1px 6px;
+    }
+  </style>
 </head>
 <body>
-  <!-- 3D scene canvas -->
-  <canvas id="bg-canvas"></canvas>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo">🛒</div>
+      <div>
+        <h1>Queueing Line Simulation</h1>
+        <div class="sub">Behavioral data collection · two independent CloudResearch Connect studies</div>
+      </div>
+    </div>
 
-  <!-- HUD overlay (populated by ui.js) -->
-  <div id="hud" class="hud"></div>
+    <p class="lede">
+      Each experiment is a separate Connect study with its own URL. Use one link below
+      as the <em>Project Link</em> of each study — a participant only ever sees the
+      condition their study sent them to. Connect appends
+      <code>?participantId=…&amp;assignmentId=…&amp;projectId=…</code> automatically.
+    </p>
 
-  <!-- Hidden MTurk submission form -->
-  <form
-    id="mturk-form"
-    method="POST"
-    action="https://www.mturk.com/mturk/externalSubmit"
-    style="display:none"
-  >
-    <input type="hidden" name="assignmentId" />
-    <input type="hidden" name="workerId" />
-    <input type="hidden" name="hitId" />
-    <input type="hidden" name="final_score" />
-    <input type="hidden" name="rl_trajectory_log" />
-    <input type="hidden" name="metadata" />
-  </form>
+    <div class="cards">
+      <!-- .html hrefs work locally too; Vercel's cleanUrls redirects them to /social and /realtime. -->
+      <a class="card" href="./social.html">
+        <h2>🙋 Experiment 1 — Social Norms (no timing)</h2>
+        <p>
+          Norms in isolation: no timer, no point bleed, no cashier pressure.
+          20 consecutive scenarios, balanced across the three event types.
+        </p>
+        <ul class="meta">
+          <li><span>Time penalty</span><strong>None</strong></li>
+          <li><span>Duration</span><strong>Self-paced</strong></li>
+          <li><span>Events</span><strong>20, non-repeating</strong></li>
+        </ul>
+        <div class="go">Open <span class="path">/social</span> →</div>
+      </a>
 
-  <script type="module" src="./src/main.js"></script>
+      <a class="card" href="./realtime.html">
+        <h2>⏱️ Experiment 2 — Real-Pace (with timing)</h2>
+        <p>
+          Stand in a real-pace supermarket queue. Time bleeds points, so every social
+          decision has a measurable cost. Ends when the participant reaches the cashier.
+        </p>
+        <ul class="meta">
+          <li><span>Time penalty</span><strong>−1 point / sec</strong></li>
+          <li><span>Duration</span><strong>~5 min (max 10)</strong></li>
+          <li><span>Events</span><strong>Random, ~1 per 20s</strong></li>
+        </ul>
+        <div class="go">Open <span class="path">/realtime</span> →</div>
+      </a>
+    </div>
+
+    <footer>
+      Append <code>?dev=1</code> to either URL to run without a <code>participantId</code> for local testing.<br />
+      Sessions are saved by <code>/api/submit</code> and carry <code>experiment_id</code>,
+      <code>participant_id</code> and the measured duration, so the two conditions stay separable
+      and bonuses can be paid from the tracking sheet.
+    </footer>
+  </div>
 </body>
 </html>

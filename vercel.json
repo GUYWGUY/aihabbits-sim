@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "redirects": [
+    { "source": "/social-norms", "destination": "/social", "permanent": false },
+    { "source": "/real-pace", "destination": "/realtime", "permanent": false }
+  ]
+}

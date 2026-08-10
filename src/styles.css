@@ -411,6 +411,21 @@ body {
 }
 .end-actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
 
+/* Save status on the end screen (session → api/submit) */
+.save-status {
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+  max-width: 700px; margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-strong);
+  font-size: 13.5px; line-height: 1.45;
+  text-align: left;
+}
+.save-status .ico { font-size: 18px; flex: 0 0 auto; }
+.save-status.ok  { border-color: rgba(61, 220, 132, 0.55); color: var(--good); }
+.save-status.bad { border-color: rgba(255, 92, 122, 0.55); color: var(--bad); }
+
 /* Urgent overlay vignette during events */
 .urgent-vignette {
   position: absolute; inset: 0;

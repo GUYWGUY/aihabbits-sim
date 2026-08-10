@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
-import { mturk, enableDevMode } from './mturk.js';
+import { connect, enableDevMode } from './platform.js';
+import { CONNECT_CONFIG } from './connect.config.js';
 import { initLegendScreen } from './legend.js';
 
 // ============================================================================
@@ -11,11 +12,20 @@ import { initLegendScreen } from './legend.js';
 // ============================================================================
 
 export class UI {
-  constructor({ world, onStart, onSubmit, onDownload }) {
+  /**
+   * @param {object} args
+   * @param {object} args.experiment  the single experiment this page runs
+   *                                  ({ mode, id, name, subtitle }) — see EXPERIMENTS in main.js
+   */
+  constructor({ world, experiment, onStart, onRetrySave, onDownload, onFinish }) {
     this.world = world;
+    this.experiment = experiment;
+    this.isSocialNorms = experiment.mode === 'SOCIAL_NORMS';
     this.onStart = onStart;
-    this.onSubmit = onSubmit;
+    this.onRetrySave = onRetrySave;
     this.onDownload = onDownload;
+    this.onFinish = onFinish;
+    this.redirectTimer = null;
 
     this.root = document.getElementById('hud');
     this._buildSkeleton();
@@ -39,11 +49,11 @@ export class UI {
           <div class="logo">🛒</div>
           <div>
             <div class="title">Queueing Line Simulation</div>
-            <div class="sub">Real-pace 3D simulation · MTurk HIT</div>
+            <div class="sub">${this.experiment.subtitle}</div>
           </div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <span class="pill" id="workerPill"><span class="dot"></span><span id="workerText">Worker: —</span></span>
+          <span class="pill" id="workerPill"><span class="dot"></span><span id="workerText">Participant: —</span></span>
           <span class="pill warn" id="modePill"><span class="dot"></span><span id="modeText">Loading…</span></span>
         </div>
       </div>
@@ -107,95 +117,51 @@ export class UI {
     this.modeTextEl = document.getElementById('modeText');
 
     this.workerTextEl.textContent =
-      'Worker: ' + (mturk.workerId ? mturk.workerId.slice(0, 8) + '…' : '(none)');
+      'Participant: ' + (connect.participantId ? connect.participantId.slice(0, 10) + '…' : '(none)');
   }
 
   // -----------------------------------------------------------------------
   // Intro screen with rules, stats, and start / dev-mode buttons.
+  // The page runs exactly one experiment, so there is no mode selector —
+  // the copy and the session parameters are written for that experiment only.
   // -----------------------------------------------------------------------
   _buildIntroScreen() {
-    this.selectedMode = 'REALTIME';
     const el = document.getElementById('introScreen');
     el.classList.add('active');
     el.innerHTML = `
       <div class="card glass two-col">
         <div>
-          <h1>Stand in line. Make decisions.</h1>
-          <p>You play one customer in a busy supermarket queue. Select your experiment mode below to begin.</p>
-
-          <h2 style="margin-top:20px; margin-bottom:10px; font-size:16px; font-weight:700; color:#fff;">Select Experiment Mode:</h2>
-          <div class="mode-cards">
-            <div class="mode-card active" id="modeRealtimeCard">
-              <div class="mode-card-title">⏱️ Real-Pace Simulation</div>
-              <div class="mode-card-desc">Stand in line, make real-time decisions. The cashier processes customers. Time costs points (1 pt/sec). ~5 min.</div>
-            </div>
-            <div class="mode-card" id="modeSocialNormsCard">
-              <div class="mode-card-title">🙋 Social Norms Mode</div>
-              <div class="mode-card-desc">Focus strictly on social norms. 20 consecutive random events with no time pressure, no timers, and no point bleeding.</div>
-            </div>
-          </div>
-
-          <ul class="rules" style="margin-top:20px;">
-            <li><span class="ico">⏱️</span><div><strong>Goal:</strong> Reach the cashier or complete all scenarios with as many points as possible.</div></li>
-            <li><span class="ico">🐢</span><div><strong>Social feedback:</strong> Other customers will do unexpected things — each interruption forces you to choose.</div></li>
-            <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
-          </ul>
+          ${this.isSocialNorms ? this._introCopySocialNorms() : this._introCopyRealtime()}
           <div class="legend" style="margin-top:15px;">
             <span>👵 Elderly</span><span>🤰 Pregnant</span><span>♿ Disabled</span><span>🧑 Adult</span><span>🧒 Youth</span>
           </div>
         </div>
         <aside class="aside">
           <h3>Session Parameters</h3>
-          <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
-          <div class="stat"><span>Time penalty</span><strong id="paramTimePenalty">−${CONFIG.TIME_PENALTY_PER_SEC} / sec</strong></div>
-          <div class="stat"><span>Avg. checkout time</span><strong id="paramCheckoutTime">${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})</strong></div>
-          <div class="stat"><span>Approx. duration</span><strong id="paramDuration">~5 min (max 10)</strong></div>
-          <div class="stat"><span>Initial position</span><strong>~#${Math.round((CONFIG.INITIAL_QUEUE_LEN_RANGE[0] + CONFIG.INITIAL_QUEUE_LEN_RANGE[1]) / 2 + 1)} in line</strong></div>
+          ${this.isSocialNorms ? this._introParamsSocialNorms() : this._introParamsRealtime()}
           <div style="margin-top:auto; display:flex; gap:8px; flex-wrap:wrap;">
-            <button id="startBtn" class="btn" disabled>▶ Start Simulation</button>
+            <button id="startBtn" class="btn" disabled>${this.isSocialNorms ? '▶ Start Experiment' : '▶ Start Simulation'}</button>
             <button id="legendBtn" class="btn" style="display:none; font-size:12px;">🔍 View 3D Legend</button>
           </div>
           <div id="previewNotice" class="notice" style="display:none">
-            <div class="badge">PREVIEW MODE</div>
-            <div>You must <strong>ACCEPT</strong> the HIT before you can play.</div>
+            <div class="badge">NO PARTICIPANT ID</div>
+            <div>
+              This link is missing its <strong>participantId</strong>, so your session could not be
+              credited. Please return to <strong>CloudResearch Connect</strong> and open the study
+              from the project link there.
+            </div>
             <div style="margin-top:10px;">
               <button id="devBtn" class="btn warn" style="font-size:12px; padding:8px 14px;">🛠️ Enable Dev Mode</button>
             </div>
-            <div class="small">Dev mode bypasses the gate for local testing. MTurk submission stays disabled.</div>
+            <div class="small">Dev mode is for local testing only — results are logged to the console, not saved.</div>
           </div>
         </aside>
       </div>
     `;
 
-    const realtimeCard = document.getElementById('modeRealtimeCard');
-    const socialNormsCard = document.getElementById('modeSocialNormsCard');
-    const paramTimePenalty = document.getElementById('paramTimePenalty');
-    const paramCheckoutTime = document.getElementById('paramCheckoutTime');
-    const paramDuration = document.getElementById('paramDuration');
-
-    const updateModeSelection = (mode) => {
-      this.selectedMode = mode;
-      if (mode === 'REALTIME') {
-        realtimeCard.classList.add('active');
-        socialNormsCard.classList.remove('active');
-        paramTimePenalty.textContent = `−${CONFIG.TIME_PENALTY_PER_SEC} / sec`;
-        paramCheckoutTime.textContent = `${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})`;
-        paramDuration.textContent = '~5 min (max 10)';
-      } else {
-        realtimeCard.classList.remove('active');
-        socialNormsCard.classList.add('active');
-        paramTimePenalty.textContent = 'None';
-        paramCheckoutTime.textContent = 'N/A (Static cashier)';
-        paramDuration.textContent = '20 events (No timer)';
-      }
-    };
-
-    realtimeCard.addEventListener('click', () => updateModeSelection('REALTIME'));
-    socialNormsCard.addEventListener('click', () => updateModeSelection('SOCIAL_NORMS'));
-
     document.getElementById('startBtn').addEventListener('click', () => {
       el.classList.remove('active');
-      this.onStart(this.selectedMode);
+      this.onStart(this.experiment.mode);
     });
     document.getElementById('legendBtn').addEventListener('click', () => {
       el.classList.remove('active');
@@ -213,6 +179,62 @@ export class UI {
     }
   }
 
+  // ---- per-experiment intro copy ----------------------------------------
+  _introCopyRealtime() {
+    return `
+      <h1>Stand in line. Beat the clock.</h1>
+      <p>You play one customer in a busy supermarket queue, running at real supermarket pace.
+         You start with ${CONFIG.INITIAL_POINTS} points and lose ${CONFIG.TIME_PENALTY_PER_SEC} point every second
+         you are still in line, so every decision costs you time — and time costs points.</p>
+      <ul class="rules" style="margin-top:20px;">
+        <li><span class="ico">⏱️</span><div><strong>Goal:</strong> Reach the cashier with as many points as possible.</div></li>
+        <li><span class="ico">🐢</span><div><strong>Time bleeds:</strong> −${CONFIG.TIME_PENALTY_PER_SEC} point per second. Anything that delays the line costs you.</div></li>
+        <li><span class="ico">⚠️</span><div><strong>Interruptions:</strong> Other customers will do unexpected things — each one forces you to choose, right now.</div></li>
+        <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
+      </ul>
+    `;
+  }
+
+  _introCopySocialNorms() {
+    return `
+      <h1>Stand in line. Make decisions.</h1>
+      <p>You play one customer in a busy supermarket queue. This session is about social norms only:
+         there is <strong>no timer and no time penalty</strong>. You will face
+         <strong>20 consecutive scenarios</strong> — take as long as you need on each one.</p>
+      <ul class="rules" style="margin-top:20px;">
+        <li><span class="ico">🙋</span><div><strong>Goal:</strong> Respond to all 20 scenarios the way you actually would in a real queue.</div></li>
+        <li><span class="ico">🧘</span><div><strong>No rush:</strong> The clock never runs and you never lose points for thinking.</div></li>
+        <li><span class="ico">⚠️</span><div><strong>Interruptions:</strong> Drops, line-cutters and friends jumping in — each one forces you to choose.</div></li>
+        <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
+      </ul>
+    `;
+  }
+
+  _introParamsRealtime() {
+    const avgStart = Math.round(
+      (CONFIG.INITIAL_QUEUE_LEN_RANGE[0] + CONFIG.INITIAL_QUEUE_LEN_RANGE[1]) / 2 + 1
+    );
+    return `
+      <div class="stat"><span>Experiment</span><strong>⏱️ Real-Pace</strong></div>
+      <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
+      <div class="stat"><span>Time penalty</span><strong>−${CONFIG.TIME_PENALTY_PER_SEC} / sec</strong></div>
+      <div class="stat"><span>Avg. checkout time</span><strong>${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})</strong></div>
+      <div class="stat"><span>Approx. duration</span><strong>~5 min (max 10)</strong></div>
+      <div class="stat"><span>Initial position</span><strong>~#${avgStart} in line</strong></div>
+    `;
+  }
+
+  _introParamsSocialNorms() {
+    return `
+      <div class="stat"><span>Experiment</span><strong>🙋 Social Norms</strong></div>
+      <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
+      <div class="stat"><span>Time penalty</span><strong>None</strong></div>
+      <div class="stat"><span>Cashier</span><strong>N/A (static)</strong></div>
+      <div class="stat"><span>Scenarios</span><strong>20 (no timer)</strong></div>
+      <div class="stat"><span>Approx. duration</span><strong>Self-paced</strong></div>
+    `;
+  }
+
   // -----------------------------------------------------------------------
   // End screen.
   // -----------------------------------------------------------------------
@@ -223,7 +245,7 @@ export class UI {
         <h1 style="text-align:center;">Simulation Complete</h1>
         <p style="text-align:center;">Thank you for participating. Your decisions are being recorded for research.</p>
         <div class="big-score" id="finalScoreText">—</div>
-        <p style="text-align:center;">Final points (will be converted to your MTurk bonus)</p>
+        <p style="text-align:center;">Final points (will be converted to your bonus)</p>
         <div class="end-grid">
           <div class="glass">
             <div class="stat-label" id="endTimeLabel">Total Time</div>
@@ -238,42 +260,128 @@ export class UI {
             <div class="num" id="endEvents">—</div>
           </div>
         </div>
+
+        <div class="save-status" id="saveStatus">
+          <span class="ico" id="saveIcon">⏳</span>
+          <span id="saveText">Saving your session…</span>
+        </div>
+
         <div class="end-actions">
-          <button id="submitBtn" class="btn success">📤 Submit to MTurk</button>
-          <button id="downloadBtn" class="btn ghost">⬇️ Download trajectory (debug)</button>
+          <button id="finishBtn" class="btn success" disabled>✅ Finish &amp; return to Connect</button>
+          <button id="retryBtn" class="btn warn" style="display:none;">🔄 Try saving again</button>
+          <button id="downloadBtn" class="btn ghost">⬇️ Download my data (backup)</button>
         </div>
         <p class="stat-label" style="text-align:center; margin-top:14px;">
           Trajectory contains <span id="endTrajLen">0</span> state-action-reward tuples.
         </p>
       </div>
     `;
-    document.getElementById('submitBtn').addEventListener('click', () => this.onSubmit());
+    this.saveStatusEl = document.getElementById('saveStatus');
+    this.saveIconEl = document.getElementById('saveIcon');
+    this.saveTextEl = document.getElementById('saveText');
+    this.finishBtn = document.getElementById('finishBtn');
+    this.retryBtn = document.getElementById('retryBtn');
+
+    this.finishBtn.addEventListener('click', () => {
+      this._cancelRedirectCountdown();
+      if (this.onFinish && !this.onFinish()) {
+        this.saveTextEl.textContent =
+          'Saved. No Connect redirect is configured — you may close this tab.';
+      }
+    });
+    this.retryBtn.addEventListener('click', () => this.onRetrySave && this.onRetrySave());
     document.getElementById('downloadBtn').addEventListener('click', () => this.onDownload());
   }
 
   // -----------------------------------------------------------------------
-  // Apply MTurk mode (Preview / Dev / Ready) to UI.
+  // Save status on the end screen. The participant must not leave for Connect
+  // before their data actually landed, so "Finish" only unlocks on success.
+  // -----------------------------------------------------------------------
+  setSaveStatus(state, detail = '') {
+    if (!this.saveStatusEl) return;
+    this.saveStatusEl.classList.remove('ok', 'bad');
+    this.retryBtn.style.display = 'none';
+
+    if (state === 'saving') {
+      this.saveIconEl.textContent = '⏳';
+      this.saveTextEl.textContent = 'Saving your session… please do not close this tab.';
+      this.finishBtn.disabled = true;
+      return;
+    }
+    if (state === 'saved') {
+      this.saveStatusEl.classList.add('ok');
+      this.saveIconEl.textContent = '✅';
+      this.saveTextEl.textContent = 'Your session was saved successfully.';
+      this.finishBtn.disabled = false;
+      return;
+    }
+    if (state === 'dev') {
+      this.saveStatusEl.classList.add('ok');
+      this.saveIconEl.textContent = '🛠️';
+      this.saveTextEl.textContent = 'Dev mode — nothing was saved; the payload was logged to the console.';
+      this.finishBtn.disabled = false;
+      return;
+    }
+    // failed
+    this.saveStatusEl.classList.add('bad');
+    this.saveIconEl.textContent = '⚠️';
+    this.saveTextEl.textContent =
+      `We could not save your session${detail ? ` (${detail})` : ''}. ` +
+      `Please try again, or download the file and message the researcher through Connect.`;
+    this.finishBtn.disabled = false;   // never trap a participant on this screen
+    this.retryBtn.style.display = 'inline-block';
+  }
+
+  /** Auto-return to Connect a few seconds after a successful save. */
+  startRedirectCountdown(onDone) {
+    this._cancelRedirectCountdown();
+    let left = Math.ceil(CONNECT_CONFIG.REDIRECT_DELAY_MS / 1000);
+    const label = () => {
+      this.finishBtn.textContent = `✅ Finish & return to Connect (${left}s)`;
+    };
+    label();
+    this.redirectTimer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        this._cancelRedirectCountdown();
+        onDone();
+        return;
+      }
+      label();
+    }, 1000);
+  }
+
+  _cancelRedirectCountdown() {
+    if (this.redirectTimer) {
+      clearInterval(this.redirectTimer);
+      this.redirectTimer = null;
+    }
+    if (this.finishBtn) this.finishBtn.textContent = '✅ Finish & return to Connect';
+  }
+
+  // -----------------------------------------------------------------------
+  // Gate the study on having a Connect participant id (or dev mode).
   // -----------------------------------------------------------------------
   _wireMode() {
     const startBtn = document.getElementById('startBtn');
     const previewNotice = document.getElementById('previewNotice');
     const legendBtn = document.getElementById('legendBtn');
-    if (mturk.isPreview) {
+    if (!connect.identified) {
       this.modePillEl.classList.add('warn');
-      this.modeTextEl.textContent = 'Preview Mode';
+      this.modeTextEl.textContent = 'Missing participant ID';
       if (previewNotice) previewNotice.style.display = 'block';
       if (startBtn) startBtn.disabled = true;
       if (legendBtn) legendBtn.style.display = 'none';
     } else {
       this.modePillEl.classList.remove('warn');
-      this.modeTextEl.textContent = mturk.devMode ? '🛠️ Dev Mode' : 'Ready';
+      this.modeTextEl.textContent = connect.devMode ? '🛠️ Dev Mode' : 'Ready';
       if (previewNotice) previewNotice.style.display = 'none';
       if (startBtn) startBtn.disabled = false;
-      if (legendBtn) legendBtn.style.display = mturk.devMode ? 'inline-block' : 'none';
+      if (legendBtn) legendBtn.style.display = connect.devMode ? 'inline-block' : 'none';
     }
   }
 
-  showEndScreen({ finalScore, totalTimeSec, decisions, events, trajLen, gameMode }) {
+  showEndScreen({ finalScore, totalTimeSec, durationTotalSec, decisions, events, trajLen, gameMode, hasRedirect }) {
     document.getElementById('finalScoreText').textContent = finalScore;
     if (gameMode === 'SOCIAL_NORMS') {
       document.getElementById('endTimeLabel').textContent = 'Total Scenarios';
@@ -281,6 +389,12 @@ export class UI {
     } else {
       document.getElementById('endTimeLabel').textContent = 'Total Time';
       document.getElementById('endTime').textContent = totalTimeSec.toFixed(1) + 's';
+    }
+    if (!hasRedirect) {
+      this.finishBtn.textContent = '✅ Finish';
+    }
+    if (durationTotalSec != null) {
+      this.finishBtn.title = `Session duration: ${durationTotalSec}s`;
     }
     document.getElementById('endDecisions').textContent = decisions;
     document.getElementById('endEvents').textContent = events;

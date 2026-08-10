@@ -1,5 +1,13 @@
 import { CONFIG } from './config.js';
-import { mturk, submitToMTurk } from './mturk.js';
+import {
+  connect,
+  submitSession,
+  beaconAbandon,
+  markGameStart,
+  timingSnapshot,
+  completionRedirectUrl,
+  goToConnect,
+} from './platform.js';
 import { TrajectoryLogger } from './trajectory.js';
 import { GameState } from './gameState.js';
 import { World } from './world.js';
@@ -9,12 +17,34 @@ import { UI } from './ui.js';
 // ============================================================================
 // Glue layer: wires Three.js world, abstract game state, event engine and HUD
 // together; runs the master tick loop and the rAF render loop.
+//
+// This module no longer self-starts. Each experiment has its own page and its
+// own entry file (entry-realtime.js / entry-social.js) which calls boot() with
+// the one mode that page runs. See EXPERIMENTS below.
 // ============================================================================
 
-const canvas = document.getElementById('bg-canvas');
-const world = new World(canvas);
-const gs = new GameState();
-const traj = new TrajectoryLogger();
+// Per-experiment presentation copy. The gameplay difference itself lives in
+// gameState.js / events.js, keyed off GameState.gameMode.
+export const EXPERIMENTS = {
+  REALTIME: {
+    mode: 'REALTIME',
+    id: 'realtime',
+    name: 'Real-Pace Simulation',
+    subtitle: 'Real-pace 3D simulation · CloudResearch Connect',
+  },
+  SOCIAL_NORMS: {
+    mode: 'SOCIAL_NORMS',
+    id: 'social-norms',
+    name: 'Social Norms',
+    subtitle: 'Social norms · no time pressure · CloudResearch Connect',
+  },
+};
+
+let experiment = EXPERIMENTS.REALTIME;
+let world = null;
+let gs = null;
+let traj = null;
+let ui = null;
 
 let lastFrameMs = performance.now();
 let tickAccumulatorMs = 0;
@@ -22,22 +52,55 @@ let secondAccumulatorMs = 0;
 let eventEngine = null;
 let started = false;
 let scanItemAccumulatorMs = 0;
-
-const ui = new UI({
-  world,
-  onStart: startGame,
-  onSubmit: handleSubmit,
-  onDownload: handleDownload,
-});
-
-// Initialize the queue immediately on load so characters are visible behind the intro
-gs.buildInitialQueue();
-world.syncQueue(gs.queue);
-
 let loopCrashed = false;
 
-// kick off the render loop immediately so the scene is live behind the intro
-animate();
+// Outcome of the automatic save that runs the moment the session ends.
+const saveState = { attempted: false, endReason: null };
+
+/**
+ * Boot one experiment. Called exactly once, by the page's entry module.
+ * @param {'REALTIME'|'SOCIAL_NORMS'} mode
+ */
+export function boot(mode) {
+  experiment = EXPERIMENTS[mode];
+  if (!experiment) throw new Error(`boot(): unknown experiment mode "${mode}"`);
+
+  const canvas = document.getElementById('bg-canvas');
+  world = new World(canvas);
+  gs = new GameState();
+  traj = new TrajectoryLogger();
+
+  ui = new UI({
+    world,
+    experiment,
+    onStart: startGame,
+    onRetrySave: saveSession,
+    onDownload: handleDownload,
+    onFinish: () => goToConnect(experiment.id),
+  });
+
+  // A participant who closes the tab mid-session still tells us something:
+  // record the drop-out so "started but never finished" is distinguishable
+  // from "never started".
+  window.addEventListener('pagehide', () => {
+    if (!started || gs.finished || saveState.attempted) return;
+    beaconAbandon({
+      experimentId: experiment.id,
+      finalScore: Math.round(gs.points),
+      trajectory: traj.export(),
+      metadata: buildMetadata(),
+    });
+  });
+
+  // Initialize the queue immediately on load so characters are visible behind the intro
+  gs.buildInitialQueue();
+  world.syncQueue(gs.queue);
+
+  lastFrameMs = performance.now();
+
+  // kick off the render loop immediately so the scene is live behind the intro
+  animate();
+}
 
 function animate() {
   if (loopCrashed) return;
@@ -192,7 +255,7 @@ function generateEventSequence(length) {
 // ----------------------------------------------------------------------------
 // Lifecycle
 // ----------------------------------------------------------------------------
-function startGame(mode = 'REALTIME') {
+function startGame(mode = experiment.mode) {
   gs.gameMode = mode;
   // Reset game state statistics but keep the queue that was built on load
   gs.points = CONFIG.INITIAL_POINTS;
@@ -235,6 +298,7 @@ function startGame(mode = 'REALTIME') {
   });
 
   started = true;
+  markGameStart();
 
   if (gs.gameMode === 'SOCIAL_NORMS') {
     setTimeout(() => {
@@ -271,25 +335,39 @@ function endGame(reason) {
     ui.log(`🏁 ${reason === 'TIMEOUT' ? 'Time cap reached.' : 'Checkout complete!'}`, 'good');
   }
 
+  const timing = timingSnapshot();
+
   ui.showEndScreen({
     finalScore: Math.round(gs.points),
     totalTimeSec: gs.elapsedSec,
+    durationTotalSec: timing.duration_total_sec,
     decisions: gs.decisionsCount,
     events: gs.eventsCount,
     trajLen: traj.entries.length,
     gameMode: gs.gameMode,
+    hasRedirect: !!completionRedirectUrl(experiment.id),
   });
+
+  // The participant never presses "submit" — the session saves itself the
+  // moment it ends, and only then are they offered the way back to Connect.
+  saveState.endReason = reason;
+  saveSession();
 }
 
 // ----------------------------------------------------------------------------
-// Submission / debug download
+// Persistence (api/submit.js → Vercel Blob + tracking spreadsheet)
 // ----------------------------------------------------------------------------
 function buildMetadata() {
   return {
-    assignmentId: mturk.assignmentId,
-    workerId: mturk.workerId,
-    hitId: mturk.hitId,
-    schema_version: '1.0',
+    participant_id: connect.participantId,
+    assignment_id: connect.assignmentId,
+    project_id: connect.projectId,
+    session_id: connect.sessionId,
+    schema_version: '2.0',
+    platform: 'cloudresearch-connect',
+    experiment_id: experiment.id,
+    experiment_mode: gs.gameMode,
+    page_url: window.location.href,
     config: CONFIG,
     decisions_count: gs.decisionsCount,
     events_count: gs.eventsCount,
@@ -299,23 +377,37 @@ function buildMetadata() {
   };
 }
 
-function handleSubmit() {
-  const finalScore = Math.round(gs.points);
-  const trajectory = traj.export();
-  const metadata = buildMetadata();
-  const ok = submitToMTurk({ finalScore, trajectory, metadata });
-  if (!ok) {
-    if (mturk.devMode) {
-      alert('🛠️ Dev Mode: real MTurk submission is disabled.\n\nThe payload was logged to the console; use "Download trajectory" to save it.');
-    } else if (mturk.isPreview) {
-      alert('Preview mode — submission disabled. (You must accept the HIT first.)');
+async function saveSession() {
+  saveState.attempted = true;
+  ui.setSaveStatus('saving');
+
+  const result = await submitSession({
+    experimentId: experiment.id,
+    endReason: saveState.endReason,
+    completed: saveState.endReason !== 'ABANDONED',
+    finalScore: Math.round(gs.points),
+    trajectory: traj.export(),
+    metadata: buildMetadata(),
+  });
+
+  if (result.ok) {
+    ui.setSaveStatus(result.skipped ? 'dev' : 'saved');
+    // Auto-return to Connect so the participant collects their completion code
+    // without having to do anything. The button stays as a manual fallback.
+    if (!result.skipped && completionRedirectUrl(experiment.id)) {
+      ui.startRedirectCountdown(() => goToConnect(experiment.id));
     }
+  } else {
+    ui.setSaveStatus('failed', result.error);
   }
+  return result;
 }
 
 function handleDownload() {
   const payload = {
     ...buildMetadata(),
+    end_reason: saveState.endReason,
+    timing: timingSnapshot(),
     final_score: Math.round(gs.points),
     trajectory: traj.export(),
   };
@@ -323,7 +415,7 @@ function handleDownload() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `trajectory_${mturk.workerId || 'preview'}_${Date.now()}.json`;
+  a.download = `trajectory_${experiment.id}_${connect.participantId || 'dev'}_${Date.now()}.json`;
   document.body.appendChild(a);
   a.click();
   a.remove();

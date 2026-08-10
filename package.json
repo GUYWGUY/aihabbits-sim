@@ -1,15 +1,19 @@
 {
   "name": "checkout-queue-sim",
   "version": "1.0.0",
-  "description": "3D supermarket checkout queue simulation for MTurk behavioral data collection (RL trajectory format).",
+  "description": "3D supermarket checkout queue simulation for MTurk behavioral data collection (RL trajectory format). Two experiments: /realtime and /social.",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build:landing && npm run build:realtime && npm run build:social",
+    "build:landing": "vite build --mode landing",
+    "build:realtime": "vite build --mode realtime",
+    "build:social": "vite build --mode social",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
+    "@vercel/blob": "^2.7.0",
     "three": "^0.161.0"
   },
   "devDependencies": {

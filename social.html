@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script>
+    window.onerror = function(message, source, lineno, colno, error) {
+      const div = document.createElement('div');
+      div.style.position = 'fixed';
+      div.style.top = '0';
+      div.style.left = '0';
+      div.style.width = '100%';
+      div.style.background = 'rgba(255,0,0,0.9)';
+      div.style.color = 'white';
+      div.style.padding = '20px';
+      div.style.zIndex = '999999';
+      div.style.fontFamily = 'monospace';
+      div.style.whiteSpace = 'pre-wrap';
+      div.innerHTML = '<h2>🚨 GLOBAL ERROR:</h2>' + message + '<br>at ' + source + ':' + lineno + ':' + colno + (error ? '<br><br>' + error.stack : '');
+      document.body.appendChild(div);
+    };
+    window.onunhandledrejection = function(event) {
+      const div = document.createElement('div');
+      div.style.position = 'fixed';
+      div.style.top = '0';
+      div.style.left = '0';
+      div.style.width = '100%';
+      div.style.background = 'rgba(255,0,0,0.9)';
+      div.style.color = 'white';
+      div.style.padding = '20px';
+      div.style.zIndex = '999999';
+      div.style.fontFamily = 'monospace';
+      div.style.whiteSpace = 'pre-wrap';
+      div.innerHTML = '<h2>🚨 UNHANDLED REJECTION:</h2>' + event.reason;
+      document.body.appendChild(div);
+    };
+  </script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Queueing Line Simulation — Social Norms</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./src/styles.css" />
+
+  <!-- ES module importmap so we don't need a build step for development.
+       The Vite build step inlines these properly for production. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D scene canvas -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- HUD overlay (populated by ui.js) -->
+  <div id="hud" class="hud"></div>
+
+  <script type="module" src="./src/entry-social.js"></script>
+</body>
+</html>
