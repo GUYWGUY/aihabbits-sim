@@ -69,7 +69,13 @@ export function boot(mode) {
   // Background bed: store ambience + light music. Served from public/audio
   // (Vite copies it next to the bundles), started on the Start click because
   // browsers refuse audio without a user gesture.
-  audio.init({ ambienceUrl: '/audio/ambience.mp3', musicUrl: '/audio/music.mp3' });
+  // Music sits well under the store noise: it should be felt, not heard.
+  audio.init({
+    ambienceUrl: '/audio/ambience.mp3',
+    musicUrl: '/audio/music.mp3',
+    ambienceVolume: 0.35,
+    musicVolume: 0.06,
+  });
 
   const canvas = document.getElementById('bg-canvas');
   world = new World(canvas);
