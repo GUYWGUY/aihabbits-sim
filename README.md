@@ -234,6 +234,7 @@ All gameplay constants live in [`src/config.js`](src/config.js). Notable default
 | `EXTRA_NPCS_BEHIND` | 3 | cosmetic queue length |
 | `EVENT_GAP_MIN_S` / `MODE` / `MAX` | 10 / 15 / 20 | start-to-start spacing, triangular draw (avg 15 s); next event waits for the previous one to finish |
 | `MAX_DURATION_S` | 600 | hard 10-minute safety cap (sessions end at the cashier, ~5 min) |
+| `MAX_EVENTS` | 60 | safety cap only — well above what a session can reach; events keep coming until the player is at the cashier |
 | `DECISION_WINDOW_S` / `DECISION_WARN_S` | 10 / 4 | REALTIME only: seconds to choose before the passive option is taken; red warning (plumbob + vignette + countdown) starts this many seconds before the end |
 
 Designed-for session length: **~5 minutes typical, up to 10 minutes**.

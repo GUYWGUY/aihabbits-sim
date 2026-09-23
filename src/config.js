@@ -30,7 +30,10 @@ export const CONFIG = {
   EVENT_GAP_MODE_S: 15,
   EVENT_GAP_MAX_S: 20,
   EVENT_PROB: 1.0,                    // P(trigger | check) - always trigger when check time arrives
-  MAX_EVENTS: 12,                     // safety cap
+  // Safety cap only. Events must keep coming for the whole session (never
+  // more than EVENT_GAP_MAX_S without one), so this sits far above what a
+  // ~5-7 minute session can reach at one event per ~15 s.
+  MAX_EVENTS: 60,
 
   // ---- decision window (REALTIME only) ----
   // Once an event fires the participant has this long to choose; then the
