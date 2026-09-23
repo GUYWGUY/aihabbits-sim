@@ -713,6 +713,11 @@ export class EventEngine {
     this.gs.decisionsCount++;
     this.gs.activeEvent = null;
     this._clearDecisionCountdown();
+    if (this.gs.gameMode !== 'SOCIAL_NORMS') {
+      // A beat of quiet before the next event, even if its draw already ran
+      // out during a long resolution.
+      this.nextCheckSec = Math.max(this.nextCheckSec, this.gs.elapsedSec + CONFIG.EVENT_MIN_IDLE_S);
+    }
     this.world.setSpectatorFocus(null); // Release camera focus
     // Catch up anyone who was frozen during the event (player + behind).
     this.world.syncQueue(this.gs.queue);

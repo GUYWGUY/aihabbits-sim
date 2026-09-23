@@ -29,6 +29,11 @@ export const CONFIG = {
   EVENT_GAP_MIN_S: 10,
   EVENT_GAP_MODE_S: 15,
   EVENT_GAP_MAX_S: 20,
+  // Minimum quiet time after an event ends before the next may start, so a
+  // long resolution (a HELP walk, a shouting match) doesn't chain straight
+  // into the next event with no beat in between. Never pushes the gap past
+  // EVENT_GAP_MAX_S: the wait is max(draw - duration, EVENT_MIN_IDLE_S).
+  EVENT_MIN_IDLE_S: 4,
   EVENT_PROB: 1.0,                    // P(trigger | check) - always trigger when check time arrives
   // Safety cap only. Events must keep coming for the whole session (never
   // more than EVENT_GAP_MAX_S without one), so this sits far above what a
