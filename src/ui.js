@@ -1,6 +1,7 @@
 import { CONFIG } from './config.js';
 import { connect, enableDevMode } from './platform.js';
 import { CONNECT_CONFIG } from './connect.config.js';
+import { audio } from './audio.js';
 import { initLegendScreen } from './legend.js';
 
 // ============================================================================
@@ -55,6 +56,7 @@ export class UI {
         <div style="display:flex; gap:8px; align-items:center;">
           <span class="pill" id="workerPill"><span class="dot"></span><span id="workerText">Participant: —</span></span>
           <span class="pill warn" id="modePill"><span class="dot"></span><span id="modeText">Loading…</span></span>
+          <button class="pill pill-btn" id="muteBtn" type="button" title="Sound on / off">🔊 Sound</button>
         </div>
       </div>
 
@@ -64,12 +66,8 @@ export class UI {
         <div class="glass stat-card">
           <div class="stat-row">
             <div>
-              <div class="stat-label">Current Points</div>
-              <div class="score" id="scoreText">${CONFIG.INITIAL_POINTS}</div>
-            </div>
-            <div style="text-align:right">
               <div class="stat-label" id="elapsedLabel">Elapsed</div>
-              <div style="font-size:22px; font-weight:700;" id="timeText">0s</div>
+              <div class="score" id="timeText">0s</div>
             </div>
           </div>
           <div style="height:10px"></div>
@@ -100,7 +98,6 @@ export class UI {
       <div class="screen" id="legendScreen"></div>
     `;
 
-    this.scoreEl = document.getElementById('scoreText');
     this.timeEl = document.getElementById('timeText');
     this.posEl = document.getElementById('posText');
     this.qlenEl = document.getElementById('qlenText');
@@ -114,12 +111,25 @@ export class UI {
     this.logEl = document.getElementById('log');
     this.vignetteEl = document.getElementById('vignette');
 
+    this.muteBtn = document.getElementById('muteBtn');
+    this.muteBtn.addEventListener('click', () => {
+      audio.toggleMuted();
+      this._syncMuteBtn();
+    });
+    this._syncMuteBtn();
+
     this.workerTextEl = document.getElementById('workerText');
     this.modePillEl = document.getElementById('modePill');
     this.modeTextEl = document.getElementById('modeText');
 
     this.workerTextEl.textContent =
       'Participant: ' + (connect.participantId ? connect.participantId.slice(0, 10) + '…' : '(none)');
+  }
+
+  _syncMuteBtn() {
+    if (!this.muteBtn) return;
+    this.muteBtn.textContent = audio.muted ? '🔇 Muted' : '🔊 Sound';
+    this.muteBtn.classList.toggle('muted', audio.muted);
   }
 
   // -----------------------------------------------------------------------
@@ -186,11 +196,11 @@ export class UI {
     return `
       <h1>Stand in line. Beat the clock.</h1>
       <p>You play one customer in a busy supermarket queue, running at real supermarket pace.
-         You start with ${CONFIG.INITIAL_POINTS} points and lose ${CONFIG.TIME_PENALTY_PER_SEC} point every second
-         you are still in line, so every decision costs you time — and time costs points.</p>
+         Every second you are still in line counts against your bonus, so every decision
+         costs you time — and time is money.</p>
       <ul class="rules" style="margin-top:20px;">
-        <li><span class="ico">⏱️</span><div><strong>Goal:</strong> Reach the cashier with as many points as possible.</div></li>
-        <li><span class="ico">🐢</span><div><strong>Time bleeds:</strong> −${CONFIG.TIME_PENALTY_PER_SEC} point per second. Anything that delays the line costs you.</div></li>
+        <li><span class="ico">⏱️</span><div><strong>Goal:</strong> Get through the checkout as quickly as you can.</div></li>
+        <li><span class="ico">🐢</span><div><strong>Time counts:</strong> Every second in line is deducted from your bonus. Anything that delays the line costs you.</div></li>
         <li><span class="ico">⚠️</span><div><strong>Interruptions:</strong> Other customers will do unexpected things — each one forces you to choose, right now.</div></li>
         <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
       </ul>
@@ -205,7 +215,7 @@ export class UI {
          need on each scenario.</p>
       <ul class="rules" style="margin-top:20px;">
         <li><span class="ico">🙋</span><div><strong>Goal:</strong> Respond to each scenario the way you actually would in a real queue.</div></li>
-        <li><span class="ico">🧘</span><div><strong>No rush:</strong> The clock never runs and you never lose points for thinking.</div></li>
+        <li><span class="ico">🧘</span><div><strong>No rush:</strong> The clock never runs and nothing counts against you for taking your time.</div></li>
         <li><span class="ico">⚠️</span><div><strong>Interruptions:</strong> Drops, line-cutters and friends jumping in — each one forces you to choose.</div></li>
         <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
       </ul>
@@ -218,8 +228,7 @@ export class UI {
     );
     return `
       <div class="stat"><span>Experiment</span><strong>⏱️ Real-Pace</strong></div>
-      <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
-      <div class="stat"><span>Time penalty</span><strong>−${CONFIG.TIME_PENALTY_PER_SEC} / sec</strong></div>
+      <div class="stat"><span>Time pressure</span><strong>Yes — every second counts</strong></div>
       <div class="stat"><span>Avg. checkout time</span><strong>${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})</strong></div>
       <div class="stat"><span>Approx. duration</span><strong>~5 min</strong></div>
       <div class="stat"><span>Initial position</span><strong>~#${avgStart} in line</strong></div>
@@ -229,7 +238,6 @@ export class UI {
   _introParamsSocialNorms() {
     return `
       <div class="stat"><span>Experiment</span><strong>🙋 Social Norms</strong></div>
-      <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
       <div class="stat"><span>Time penalty</span><strong>None</strong></div>
       <div class="stat"><span>Cashier</span><strong>N/A (static)</strong></div>
       <div class="stat"><span>Approx. duration</span><strong>Self-paced</strong></div>
@@ -244,9 +252,7 @@ export class UI {
     el.innerHTML = `
       <div class="card glass" style="text-align:center;">
         <h1 style="text-align:center;">Simulation Complete</h1>
-        <p style="text-align:center;">Thank you for participating. Your decisions are being recorded for research.</p>
-        <div class="big-score" id="finalScoreText">—</div>
-        <p style="text-align:center;">Final points (will be converted to your bonus)</p>
+        <p style="text-align:center;">Thank you for participating. Your decisions have been recorded for research.</p>
         <div class="end-grid">
           <div class="glass">
             <div class="stat-label" id="endTimeLabel">Total Time</div>
@@ -383,7 +389,6 @@ export class UI {
   }
 
   showEndScreen({ finalScore, totalTimeSec, durationTotalSec, decisions, events, trajLen, gameMode, hasRedirect }) {
-    document.getElementById('finalScoreText').textContent = finalScore;
     if (gameMode === 'SOCIAL_NORMS') {
       document.getElementById('endTimeLabel').textContent = 'Scenarios';
       document.getElementById('endTime').textContent = String(events);
@@ -407,7 +412,8 @@ export class UI {
   // Stats panel updates.
   // -----------------------------------------------------------------------
   updateStats({ score, time, position, qlen, cashPct, decisions, gameMode, eventsCount }) {
-    this.scoreEl.textContent = Math.round(score);
+    // `score` is deliberately not rendered: points stay in the trajectory
+    // and in the saved session, but participants never see the number.
     if (gameMode === 'SOCIAL_NORMS') {
       document.getElementById('elapsedLabel').textContent = 'Scenarios';
       this.timeEl.textContent = `${eventsCount}`;
@@ -424,11 +430,6 @@ export class UI {
     this.cashierBarEl.style.width = cashPct.toFixed(1) + '%';
   }
 
-  flashScore() {
-    this.scoreEl.classList.remove('flash');
-    void this.scoreEl.offsetWidth;
-    this.scoreEl.classList.add('flash');
-  }
 
   // -----------------------------------------------------------------------
   // Event banner + log + speech bubble + floating text.
@@ -534,6 +535,30 @@ export class UI {
     this.root.appendChild(el);
     this.anchors.push({ kind: 'speech', vec3: headPos, el, ttlMs, currentMs: 0, npcId });
     setTimeout(() => el.remove(), ttlMs);
+  }
+
+  /**
+   * A little burst of emojis rising from above a character's head (gratitude,
+   * relief...). Each one follows the head, drifts sideways and fades.
+   */
+  floatEmojis(npcId, emojis, ttlMs = 2400) {
+    emojis.forEach((emoji, i) => {
+      setTimeout(() => {
+        const headPos = this.world.getCharacterHeadPos(npcId);
+        if (!headPos) return;
+        const el = document.createElement('div');
+        el.className = 'float-emoji';
+        el.textContent = emoji;
+        el.style.setProperty('--dx', `${Math.round((Math.random() - 0.5) * 70)}px`);
+        el.style.animationDuration = `${ttlMs}ms`;
+        this.root.appendChild(el);
+        this.anchors.push({
+          kind: 'speech', vec3: headPos, el, ttlMs, currentMs: 0, npcId,
+          yOffset3D: 0.45,
+        });
+        setTimeout(() => el.remove(), ttlMs);
+      }, i * 260);
+    });
   }
 
   /** Bobbing anger emoji above a character's head for the duration of an argument. */

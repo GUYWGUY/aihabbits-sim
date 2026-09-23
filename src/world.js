@@ -29,6 +29,21 @@ const KNEEL_TILT       = 0.68; // ≈39° torso pitch at full crouch
 const KNEEL_LEG_SQUASH = 0.36; // legs compress to 64% height → hips drop ≈0.24 m
 const KNEEL_RAMP       = 0.12; // fraction of the duration spent easing in / out
 
+// Queue-argument distraction (cashierDistracted / customerDistracted): the
+// cashier and customers stop what they're doing and stare at the argument.
+const BELT_SPEED            = 0.6;  // conveyor scan-item speed (m/s, toward the cashier)
+const SCANNER_IDLE_GLOW     = 0.35; // steady scanner glow while the cashier has stopped scanning
+const DISTRACT_EASE         = 4;    // 1/s — ease rate into / out of the distracted pose, belt, scanner
+const DISTRACT_BODY_SHARE   = 0.5;  // cashier body turns this fraction of the way to the argument…
+const DISTRACT_TWIST_SHARE  = 0.35; // …of what's left, the torso twists this much, the head does the rest
+const DISTRACT_HEAD_MAX     = 1.1;  // max head(+torso) yaw relative to the body (≈63°)
+const CASHIER_SHAKE_MS      = 700;  // impatient "no, no" head-shake (cashier head only)
+const CUSTOMER_SHAKE_DELAY  = 250;  // ms after the call before the customer's 'head-shake' gesture
+const CUSTOMER_SHAKE_MS     = 900;  // duration of that gesture
+
+// Scratch vectors for per-frame distraction / gaze math (avoid allocations).
+const _cashierWP = new THREE.Vector3();
+
 export class World {
   constructor(canvas) {
     this.canvas = canvas;
@@ -85,6 +100,14 @@ export class World {
 
     // player marker alert level in [0,1] (see setPlayerAlert)
     this.playerAlert = 0;
+
+    // queue-argument distraction (see cashierDistracted / customerDistracted).
+    // Expiry is deadline-driven from update() — no setTimeout to leak.
+    this._cashierDistraction = null;        // { targetId, endMs, baseYaw, shake1Ms, shake2Ms } | null
+    this._cashierDistractBlend = 0;         // 0..1 eased weight: scanner pulse → idle glow, belt → stopped
+    this._cashierHeadYaw = 0;               // eased cashier head yaw (rel. to torso), shake added on top
+    this._cashierTwist = 0;                 // eased cashier torso twist (upperBody yaw)
+    this._customerDistractions = new Map(); // npcId -> distraction state (also on mesh.userData.distraction)
 
     this._buildLights();
     this._buildEnvironment();
@@ -674,6 +697,10 @@ export class World {
     const t = this.clock.getElapsedTime();
     const nowMs = performance.now();
 
+    // -- queue-argument distractions: expiry + customer rotation overrides
+    // (before the character loop so the override applies this frame) --
+    this._updateDistractions(nowMs, dtSec);
+
     for (const [id, mesh] of this.characterMap.entries()) {
       const script = mesh.userData.script;
 
@@ -855,11 +882,35 @@ export class World {
     // -- scanner pulse + cashier gaze tracking --
     if (this.scannerMesh) {
       const pulse = 0.6 + Math.abs(Math.sin(t * 4)) * 0.7;
-      this.scannerMesh.material.emissiveIntensity = pulse;
+      // A distracted cashier stops scanning: the pulse fades to a steady glow.
+      this.scannerMesh.material.emissiveIntensity =
+        pulse + (SCANNER_IDLE_GLOW - pulse) * this._cashierDistractBlend;
     }
     if (this.cashierMesh) {
       const g = this.cashierMesh.userData.gesture;
-      if (g) {
+      const cd = this._cashierDistraction;
+      let headYaw = 0, twistYaw = 0, shakeYaw = 0; // distraction pose (0 = rest)
+      if (cd) {
+        // Watching an argument in the queue. Overrides the turn-look gesture
+        // (which sets an absolute body yaw) — one requested mid-distraction
+        // is dropped. Body turns part-way from the served customer toward
+        // the argument; torso twist + head make up the rest (clamped).
+        if (g) delete this.cashierMesh.userData.gesture;
+        // (checked in _updateDistractions, but an exit onComplete in the
+        // character loop above can drop it mid-frame — fall back to rest)
+        const tgt = this.characterMap.get(cd.targetId);
+        if (tgt) {
+          this.cashierMesh.getWorldPosition(_cashierWP);
+          const targetYaw = Math.atan2(tgt.position.x - _cashierWP.x, tgt.position.z - _cashierWP.z);
+          const bodyYaw = cd.baseYaw + shortestAngleDiff(cd.baseYaw, targetYaw) * DISTRACT_BODY_SHARE;
+          this.cashierMesh.rotation.y += shortestAngleDiff(this.cashierMesh.rotation.y, bodyYaw) * Math.min(1, dtSec * 3);
+          const rest = Math.max(-DISTRACT_HEAD_MAX, Math.min(DISTRACT_HEAD_MAX,
+            shortestAngleDiff(this.cashierMesh.rotation.y, targetYaw)));
+          twistYaw = rest * DISTRACT_TWIST_SHARE;
+          headYaw = rest - twistYaw;
+          shakeYaw = headShakeYaw(nowMs, cd.shake1Ms) + headShakeYaw(nowMs, cd.shake2Ms);
+        }
+      } else if (g) {
         const ageMs = nowMs - g.startMs;
         if (ageMs >= g.durationMs) {
           delete this.cashierMesh.userData.gesture;
@@ -885,6 +936,16 @@ export class World {
         while (diff < -Math.PI) diff += 2 * Math.PI;
         this.cashierMesh.rotation.y = cur + diff * Math.min(1, dtSec * 3);
       }
+      // Head + torso twist ease into the distraction pose, or back to rest
+      // (0 = the cashier's normal look). The impatient head-shake rides on
+      // top of the eased value so the easing doesn't damp it away.
+      const k = Math.min(1, dtSec * DISTRACT_EASE);
+      this._cashierHeadYaw += (headYaw - this._cashierHeadYaw) * k;
+      this._cashierTwist += (twistYaw - this._cashierTwist) * k;
+      const cHead = this.cashierMesh.userData.headMesh;
+      const cUpper = this.cashierMesh.userData.upperBody;
+      if (cHead) cHead.rotation.y = this._cashierHeadYaw + shakeYaw;
+      if (cUpper) cUpper.rotation.y = this._cashierTwist;
     }
 
     // -- per-NPC head rotation: queue customers turn 90° "left" (face out of
@@ -900,7 +961,14 @@ export class World {
          mesh.userData.idleHeadOffset *= (1 - dtSec * 1.5);
       }
 
-      if (this.spectatorFocusId && this.spectatorFocusId !== id) {
+      const distraction = mesh.userData.distraction;
+      if (distraction) {
+        // customerDistracted: head leads the (overridden, easing) body toward
+        // the argument. Takes precedence over spectator looking, so the
+        // spectator's random-emotion pick doesn't repaint the angry face.
+        target = Math.max(-DISTRACT_HEAD_MAX, Math.min(DISTRACT_HEAD_MAX,
+          shortestAngleDiff(mesh.rotation.y, distraction.yaw)));
+      } else if (this.spectatorFocusId && this.spectatorFocusId !== id) {
           const focusMesh = this.characterMap.get(this.spectatorFocusId);
           if (focusMesh && focusMesh.userData.queueIdx !== undefined && mesh.userData.queueIdx !== undefined) {
               const distInQueue = Math.abs(focusMesh.userData.queueIdx - mesh.userData.queueIdx);
@@ -960,13 +1028,13 @@ export class World {
       a.mesh.position.y = Math.sin(t * 1.4 + a.bobPhase) * 0.025;
     }
 
-    // -- conveyor scan items --
+    // -- conveyor scan items (belt stops while the camera is on a spectator
+    // focus, and eases to a halt / back up while the cashier is distracted) --
+    const beltSpeed = this.spectatorFocusId ? 0 : BELT_SPEED * (1 - this._cashierDistractBlend);
     for (let i = this.scanItems.length - 1; i >= 0; i--) {
       const it = this.scanItems[i];
       it.userData.t += dtSec;
-      if (!this.spectatorFocusId) {
-        it.position.x -= dtSec * 0.6;
-      }
+      it.position.x -= dtSec * beltSpeed;
       it.position.y = 1.18 + Math.sin(t * 5 + i) * 0.005;
       if (it.position.x < CASHIER_X - 0.8) {
         this.scene.remove(it);
@@ -1397,6 +1465,156 @@ export class World {
       startMs: performance.now(),
       durationMs,
     };
+  }
+
+  // -----------------------------------------------------------------------
+  // Queue-argument distraction: while a line-cutter / friend-joiner argument
+  // plays out, the cashier and the customer being served stop, stare at it
+  // and look angry, then go back to normal. All expiry is deadline-driven
+  // from update() (no timers), so overlapping / repeated calls simply
+  // replace the state and can never leave anyone stuck distracted.
+  // -----------------------------------------------------------------------
+
+  /**
+   * For durationMs the cashier stops scanning (scanner pulse → steady glow,
+   * belt items halt), turns body part-way / torso + head the rest toward
+   * character targetNpcId (tracking it if it moves), holds an angry face and
+   * gives an impatient head-shake once (≥1.5 s) or twice (≥4 s). Then eases
+   * back to normal: neutral face (only if still angry), default gaze
+   * tracking, belt moving. A new call replaces the current one (new target,
+   * deadline measured from now). Ends early if the target leaves the scene.
+   * No-op (returns false) if the target doesn't exist or durationMs isn't > 0.
+   */
+  cashierDistracted(targetNpcId, durationMs) {
+    const dur = Number(durationMs);
+    if (!this.cashierMesh || !this.characterMap.has(targetNpcId) || !(dur > 0)) return false;
+    const now = performance.now();
+    // Body "home" yaw: facing the customer being served (the default gaze).
+    const c0 = this.queuePosition(0);
+    this.cashierMesh.getWorldPosition(_cashierWP);
+    this._cashierDistraction = {
+      targetId: targetNpcId,
+      endMs: now + dur,
+      baseYaw: Math.atan2(c0.x - _cashierWP.x, c0.z - _cashierWP.z),
+      shake1Ms: dur >= 1500 ? now + dur * 0.30 : Infinity,
+      shake2Ms: dur >= 4000 ? now + dur * 0.70 : Infinity,
+    };
+    delete this.cashierMesh.userData.gesture; // a turn-look would fight the stare
+    if (this.cashierMesh.userData.currentEmotion !== 'angry') this.setCashierEmotion('angry');
+    return true;
+  }
+
+  /**
+   * For durationMs, customer npcId (any queue character; normally the one
+   * being served) turns to face targetNpcId via the rotation override (head
+   * leads the body), shows an angry face and does one 'head-shake' gesture
+   * ~250 ms in — deferred while another gesture is playing, skipped if that
+   * runs past the first 40% of the hold. On expiry the override is restored
+   * to whatever it was before (only if nobody replaced it meanwhile) and
+   * the face goes back to neutral (only if still angry). Ends early if either
+   * character leaves the scene or npcId starts its exit walk. Re-calling for
+   * the same npcId replaces the state. No-op (returns false) if either
+   * character is missing, they're the same, or durationMs isn't > 0.
+   */
+  customerDistracted(npcId, targetNpcId, durationMs) {
+    const mesh = this.characterMap.get(npcId);
+    const tgt = this.characterMap.get(targetNpcId);
+    const dur = Number(durationMs);
+    if (!mesh || !tgt || npcId === targetNpcId || mesh.userData.exiting || !(dur > 0)) return false;
+    const ud = mesh.userData;
+    const now = performance.now();
+
+    // Override to restore at the end: the pre-distraction one. On re-entry
+    // that's the previous state's saved value, if the override is still ours.
+    let prevOverride = ud.rotOverride;
+    const prev = this._customerDistractions.get(npcId);
+    if (prev && prev.ownsOverride && ud.rotOverride === prev.appliedRot) prevOverride = prev.prevOverride;
+
+    const yaw = Math.atan2(tgt.position.x - mesh.position.x, tgt.position.z - mesh.position.z);
+    const d = {
+      mesh,
+      targetId: targetNpcId,
+      endMs: now + dur,
+      yaw,                       // current world yaw toward the target (read by the head loop)
+      prevOverride,
+      appliedRot: yaw,           // last value we wrote to rotOverride
+      ownsOverride: true,        // false once someone else writes / clears the override
+      shakeAtMs: now + CUSTOMER_SHAKE_DELAY,
+      shakeDeadlineMs: now + dur * 0.4,
+      shakeDone: false,
+    };
+    ud.rotOverride = yaw;
+    ud.distraction = d;
+    this._customerDistractions.set(npcId, d);
+    if (ud.currentEmotion !== 'angry') this._paintEmotion(mesh, 'angry');
+    return true;
+  }
+
+  /**
+   * Immediately cancel every active distraction (cashier + all customers):
+   * faces back to neutral (if still angry), customer rotation overrides
+   * restored, pending head-shakes dropped. Head / torso / belt / scanner
+   * ease back over a fraction of a second in update().
+   */
+  cashierAttentionReset() {
+    this._endCashierDistraction();
+    for (const id of this._customerDistractions.keys()) this._endCustomerDistraction(id);
+  }
+
+  /** Per-frame: expire distractions, drive customer overrides + head-shake. */
+  _updateDistractions(nowMs, dtSec) {
+    const cd = this._cashierDistraction;
+    if (cd && (nowMs >= cd.endMs || !this.characterMap.has(cd.targetId))) this._endCashierDistraction();
+    const want = this._cashierDistraction ? 1 : 0;
+    this._cashierDistractBlend += (want - this._cashierDistractBlend) * Math.min(1, dtSec * DISTRACT_EASE);
+    if (Math.abs(want - this._cashierDistractBlend) < 0.001) this._cashierDistractBlend = want;
+
+    if (this._customerDistractions.size === 0) return;
+    for (const [id, d] of this._customerDistractions) {
+      const mesh = this.characterMap.get(id);
+      const tgt = this.characterMap.get(d.targetId);
+      if (mesh !== d.mesh || !tgt || mesh.userData.exiting || nowMs >= d.endMs) {
+        this._endCustomerDistraction(id);
+        continue;
+      }
+      const ud = mesh.userData;
+      d.yaw = Math.atan2(tgt.position.x - mesh.position.x, tgt.position.z - mesh.position.z);
+      if (d.ownsOverride) {
+        // Keep tracking the target — unless events.js replaced / cleared the
+        // override meanwhile, in which case yield it for good.
+        if (ud.rotOverride === d.appliedRot) ud.rotOverride = d.appliedRot = d.yaw;
+        else d.ownsOverride = false;
+      }
+      if (!d.shakeDone && nowMs >= d.shakeAtMs) {
+        if (!ud.gesture) {
+          this.gestureCharacter(id, 'head-shake', CUSTOMER_SHAKE_MS);
+          d.shakeDone = true;
+        } else if (nowMs >= d.shakeDeadlineMs) {
+          d.shakeDone = true; // busy with another gesture the whole time — skip it
+        }
+      }
+    }
+  }
+
+  _endCashierDistraction() {
+    if (!this._cashierDistraction) return;
+    this._cashierDistraction = null;
+    if (this.cashierMesh && this.cashierMesh.userData.currentEmotion === 'angry') {
+      this.setCashierEmotion('neutral');
+    }
+  }
+
+  _endCustomerDistraction(npcId) {
+    const d = this._customerDistractions.get(npcId);
+    if (!d) return;
+    this._customerDistractions.delete(npcId);
+    const ud = d.mesh.userData;
+    if (ud.distraction === d) delete ud.distraction;
+    if (d.ownsOverride && ud.rotOverride === d.appliedRot) {
+      if (d.prevOverride === undefined) delete ud.rotOverride;
+      else ud.rotOverride = d.prevOverride;
+    }
+    if (ud.currentEmotion === 'angry') this._paintEmotion(d.mesh, 'neutral');
   }
 
   /**
@@ -2053,6 +2271,15 @@ function makeTileTexture() {
 
 // Smoothstep easing for scripted character moves.
 function easeInOut(t) { return t * t * (3 - 2 * t); }
+
+// Impatient "no, no" head-shake yaw offset for a shake that starts at
+// startMs (0 outside its CASHIER_SHAKE_MS window; startMs may be Infinity).
+function headShakeYaw(nowMs, startMs) {
+  const age = nowMs - startMs;
+  if (!(age >= 0 && age < CASHIER_SHAKE_MS)) return 0;
+  const p = age / CASHIER_SHAKE_MS;
+  return Math.sin(p * Math.PI * 6) * 0.30 * (1 - p);
+}
 
 // Shortest signed angle difference (so a body lerping from rotation π to
 // rotation -π/2 turns the natural 90°, not the long-way 270°).

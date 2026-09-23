@@ -8,6 +8,7 @@ import {
   completionRedirectUrl,
   goToConnect,
 } from './platform.js';
+import { audio } from './audio.js';
 import { TrajectoryLogger } from './trajectory.js';
 import { GameState } from './gameState.js';
 import { World } from './world.js';
@@ -65,6 +66,11 @@ export function boot(mode) {
   experiment = EXPERIMENTS[mode];
   if (!experiment) throw new Error(`boot(): unknown experiment mode "${mode}"`);
 
+  // Background bed: store ambience + light music. Served from public/audio
+  // (Vite copies it next to the bundles), started on the Start click because
+  // browsers refuse audio without a user gesture.
+  audio.init({ ambienceUrl: '/audio/ambience.mp3', musicUrl: '/audio/music.mp3' });
+
   const canvas = document.getElementById('bg-canvas');
   world = new World(canvas);
   gs = new GameState();
@@ -121,7 +127,7 @@ function animate() {
 
     // visual scan items spawn while a customer is being scanned
     if (started && !gs.finished && gs.cashierProgressMs > 0) {
-      scanItemAccumulatorMs += dtMs;
+      scanItemAccumulatorMs += dtMs * gs.cashierRate();   // belt slows with the cashier
       if (scanItemAccumulatorMs > 2200) {
         world.spawnScanItem();
         scanItemAccumulatorMs = 0;
@@ -211,7 +217,6 @@ function gameTick(dtMs) {
     eventsCount: gs.eventsCount,
   });
 
-  if (gs.points <= 100 && Math.random() < 0.02) ui.flashScore();
 }
 
 // ----------------------------------------------------------------------------
@@ -286,7 +291,7 @@ function startGame(mode = experiment.mode) {
   // Dev-only handle so a specific event/branch can be forced from the console
   // (e.g. __sim.events.triggerIsraeliQueue()) instead of waiting for the RNG.
   if (connect.devMode) {
-    window.__sim = { gs, world, ui, traj, events: eventEngine, endGame };
+    window.__sim = { gs, world, ui, traj, events: eventEngine, endGame, audio };
   }
 
   if (gs.gameMode === 'SOCIAL_NORMS') {
@@ -306,6 +311,7 @@ function startGame(mode = experiment.mode) {
 
   started = true;
   markGameStart();
+  audio.start();
 
   if (gs.gameMode === 'SOCIAL_NORMS') {
     setTimeout(() => {
@@ -317,6 +323,8 @@ function startGame(mode = experiment.mode) {
 function endGame(reason) {
   if (gs.finished) return;
   gs.finished = true;
+  world.cashierAttentionReset?.();
+  audio.stop({ fadeMs: 1500 });
 
   // final transition
   const prev = gs.snapshotState();

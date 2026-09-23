@@ -35,6 +35,14 @@ function sampleEventGap() {
   return triangular(CONFIG.EVENT_GAP_MIN_S, CONFIG.EVENT_GAP_MODE_S, CONFIG.EVENT_GAP_MAX_S);
 }
 
+const THANKS_LINES = [
+  'Thank you so much!',
+  'Oh, thank you - that was kind.',
+  'Thanks a lot, really!',
+  'You are a lifesaver, thank you!',
+];
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
 export class EventEngine {
   /**
    * @param {object} args
@@ -73,10 +81,11 @@ export class EventEngine {
     this.nextCheckSec = this.gs.elapsedSec + sampleEventGap();
 
     if (this.gs.eventsCount >= CONFIG.MAX_EVENTS) return;
-    if (this.gs.isPlayerAtCashier()) return;
-    if (this.gs.playerPosition() <= 1) return;
     if (Math.random() > CONFIG.EVENT_PROB) return;
 
+    // The cadence holds for the whole session, including while the player is
+    // being served: nobody can cut in front of them there, so that phase
+    // gets drops only (see triggerRandomEvent).
     this.triggerRandomEvent();
   }
 
@@ -90,6 +99,23 @@ export class EventEngine {
       : 0;
     this.ui.setDecisionCountdown(r, level);
     if (this.world.setPlayerAlert) this.world.setPlayerAlert(level);
+  }
+
+  // An argument in the line pulls the cashier's (and the served customer's)
+  // attention: they stop and glare, and scanning slows to a crawl until it is
+  // over - the whole queue pays for it, not just the two shouting.
+  _distractCashier(targetId, durationMs) {
+    this.gs.slowCashier(CONFIG.ARGUE_CASHIER_RATE, durationMs);
+    this.world.cashierDistracted?.(targetId, durationMs);
+    const front = this.gs.queue[0];
+    if (front && !front.isPlayer && front.id !== targetId) {
+      this.world.customerDistracted?.(front.id, targetId, durationMs);
+    }
+  }
+
+  _cashierBack() {
+    this.gs.slowCashier(1, 0);
+    this.world.cashierAttentionReset?.();
   }
 
   _clearDecisionCountdown() {
@@ -118,7 +144,9 @@ export class EventEngine {
     if (this.gs.gameMode === 'SOCIAL_NORMS' && this.gs.eventSequence) {
       t = this.gs.eventSequence[this.gs.eventsCount];
     } else {
-      const choices = ['DROP', 'CUTTER', 'ISRAELI_QUEUE'];
+      const choices = this.gs.playerPosition() <= 1
+        ? ['DROP']
+        : ['DROP', 'CUTTER', 'ISRAELI_QUEUE'];
       t = choices[Math.floor(Math.random() * choices.length)];
     }
 
@@ -153,11 +181,15 @@ export class EventEngine {
     const isAtCashier = (dropperIdx === 0);
     this.gs.eventsCount++;
 
+    // With the player being served, everyone else is behind them.
+    const playerAtCashier = this.gs.isPlayerAtCashier();
     const where = isAtCashier
       ? 'at the cashier'
-      : (dropperIdx === this.gs.playerIndex() - 1
-          ? 'right in front of you'
-          : `a few places ahead in line`);
+      : playerAtCashier
+        ? 'behind you in line'
+        : (dropperIdx === this.gs.playerIndex() - 1
+            ? 'right in front of you'
+            : `a few places ahead in line`);
     let actorStr = 'customer';
     if (at.age === 'Elderly') {
       actorStr = '<strong>elderly person</strong>';
@@ -179,7 +211,9 @@ export class EventEngine {
     this.gs.activeEvent = {
       type: 'DROP',
       npc: at,
-      blocksCheckout: isAtCashier,         // only blocks the queue if dropper is at front
+      // The line stops while its front is involved: the dropper is being
+      // served, or the player is and may walk off to help.
+      blocksCheckout: isAtCashier || this.gs.isPlayerAtCashier(),
       isAtCashier,
       startedAt: this.gs.elapsedSec,
       options: [
@@ -226,13 +260,16 @@ export class EventEngine {
     const prevState = this.gs.snapshotState();
     const customer = this.gs.activeEvent.npc;
     const isAtCashier = !!this.gs.activeEvent.isAtCashier;
+    // The line is stopped whenever its front is involved - the dropper being
+    // served, or the player being served (their own checkout waits for them).
+    const lineStopped = isAtCashier || this.gs.isPlayerAtCashier();
     const items = this.activeDroppedItems || [];
     let delaySec, logKind, msg;
 
     if (action === 'HELP') {
       delaySec = CONFIG.HELP_DELAY_S;
       logKind = 'good';
-      msg = `✋ You helped pick everything up. (-${delaySec}s wait${isAtCashier ? '' : ', no cashier delay'})`;
+      msg = `✋ You helped pick everything up. (-${delaySec}s wait${lineStopped ? '' : ', no cashier delay'})`;
 
       const dropperPos = this.world.getCharacterPos(customer.id);
       const playerStart = this.world.getCharacterPos('PLAYER');
@@ -266,6 +303,14 @@ export class EventEngine {
         this.world.gestureCharacter('PLAYER', 'kneel', totalRecoverMs);
         this.world.gestureCharacter(customer.id, 'kneel', totalRecoverMs);
         setTimeout(() => this.world.setEmotion(customer.id, 'happy'), totalRecoverMs * 0.55);
+        // Gratitude once the last item is back in their hands.
+        setTimeout(() => {
+          this.world.setEmotion(customer.id, 'happy');
+          this.world.setEmotion('PLAYER', 'happy');
+          this.world.gestureCharacter(customer.id, 'wave', 1600);
+          this.ui.speech(customer.id, pick(THANKS_LINES), 2800);
+          this.ui.floatEmojis(customer.id, ['💚', '🙏', '✨', '😊'], 2600);
+        }, totalRecoverMs);
 
         // Compute queue position now (frozen during event, safe to read here).
         const idx = this.gs.playerIndex();
@@ -285,7 +330,7 @@ export class EventEngine {
     } else if (action === 'COMPLAIN') {
       delaySec = CONFIG.COMPLAIN_DELAY_S;
       logKind = 'warn';
-      msg = `📢 You complained loudly. (-${delaySec}s${isAtCashier ? '' : ', no cashier delay'})`;
+      msg = `📢 You complained loudly. (-${delaySec}s${lineStopped ? '' : ', no cashier delay'})`;
 
       this.world.setEmotion('PLAYER', 'angry');
       this.world.setEmotion(customer.id, 'sad');
@@ -399,6 +444,7 @@ export class EventEngine {
       // Sustained anger icons above both heads for the whole argument.
       this.ui.angerIcon('PLAYER', argDurationMs);
       this.ui.angerIcon(cutter.id, argDurationMs);
+      this._distractCashier(cutter.id, argDurationMs);
 
       // Speech + curse bubbles interleaved so the argument has texture.
       this.ui.speech('PLAYER', 'Hey — the line is here!', 1800);
@@ -426,6 +472,7 @@ export class EventEngine {
 
       setTimeout(() => {
         this.world.setSpectatorFocus(null);
+        this._cashierBack();
         // Release the rotation overrides so they revert to queue rotation.
         this.world.clearRotationOverride('PLAYER');
         this.world.clearRotationOverride(cutter.id);
@@ -575,6 +622,7 @@ export class EventEngine {
 
       this.ui.angerIcon('PLAYER', objectDurationMs * 0.7);
       this.ui.angerIcon(friend.id, objectDurationMs * 0.7);
+      this._distractCashier(friend.id, objectDurationMs);
 
       this.ui.speech('PLAYER', 'You can\'t just cut in!', 1900);
       setTimeout(() => this.ui.curse(friend.id, 1600), 600);
@@ -587,6 +635,7 @@ export class EventEngine {
 
       setTimeout(() => {
         this.world.setSpectatorFocus(null);
+        this._cashierBack();
         this.world.clearRotationOverride('PLAYER');
         this.world.clearRotationOverride(friend.id);
         this.world.clearScript('PLAYER');
@@ -713,6 +762,7 @@ export class EventEngine {
     this.gs.decisionsCount++;
     this.gs.activeEvent = null;
     this._clearDecisionCountdown();
+    this._cashierBack();
     if (this.gs.gameMode !== 'SOCIAL_NORMS') {
       // A beat of quiet before the next event, even if its draw already ran
       // out during a long resolution.

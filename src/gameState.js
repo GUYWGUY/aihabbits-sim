@@ -70,6 +70,7 @@ export class GameState {
     this.cashierTotalMs = 0;
     this.cashierProgressMs = 0;
     this.cashierExtraMs = 0;     // delays added by player actions
+    this.cashierSlow = null;     // { factor, untilMs } while the cashier is distracted
 
     this.activeEvent = null;
     this.eventsCount = 0;
@@ -104,7 +105,7 @@ export class GameState {
     if (this.activeEvent && this.activeEvent.blocksCheckout) {
       return { customerFinished: false };
     }
-    this.cashierProgressMs += dtMs;
+    this.cashierProgressMs += dtMs * this.cashierRate();
     const total = this.cashierTotalMs + this.cashierExtraMs;
     if (this.cashierProgressMs < total) return { customerFinished: false };
 
@@ -141,6 +142,18 @@ export class GameState {
   /** Used by events to delay the current cashier without bumping the queue order. */
   addCashierDelay(seconds) {
     this.cashierExtraMs += seconds * 1000;
+  }
+
+  /** Scan at `factor` speed for `ms` (e.g. 0.3 while the cashier gawks at an argument). */
+  slowCashier(factor, ms) {
+    this.cashierSlow = ms > 0 ? { factor, untilMs: this.elapsedMs + ms } : null;
+  }
+
+  /** Current scanning speed multiplier (1 = normal). */
+  cashierRate() {
+    if (!this.cashierSlow) return 1;
+    if (this.elapsedMs >= this.cashierSlow.untilMs) { this.cashierSlow = null; return 1; }
+    return this.cashierSlow.factor;
   }
 
   insertCutterInFrontOfPlayer(cutter) {

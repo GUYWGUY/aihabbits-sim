@@ -57,6 +57,7 @@ export const CONFIG = {
   ARGUE_ESCALATE_S: 10,               // dragged-out shouting match, cutter stays
   OBJECT_GROUP_S: 6,                  // verbal back-and-forth with the friend
   COMPLAIN_CASHIER_PENALTY_S: 8,      // cashier intervenes, scan slows visibly
+  ARGUE_CASHIER_RATE: 0.3,            // scanning speed while the cashier is watching an argument
 
   // ---- mid-game arrival pacing ----
   // How long a cutter or friend-joiner takes to walk into position from

@@ -91,6 +91,12 @@ body {
   background: var(--good); box-shadow: 0 0 10px var(--good);
 }
 .pill.warn .dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+.pill-btn {
+  cursor: pointer; font-family: inherit; font-weight: 600; color: var(--text);
+  transition: background 0.14s ease, filter 0.14s ease;
+}
+.pill-btn:hover { filter: brightness(1.15); }
+.pill-btn.muted { color: var(--text-dim); }
 
 /* ---------- Side panel (right) ---------- */
 .side {
@@ -106,12 +112,6 @@ body {
   font-size: 36px; font-weight: 800; line-height: 1;
   background: linear-gradient(90deg, #fff, var(--accent-2));
   -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.score.flash { animation: scoreFlash 0.5s ease; }
-@keyframes scoreFlash {
-  0%   { filter: brightness(1); }
-  50%  { filter: brightness(1.7) hue-rotate(-25deg); transform: scale(1.04); }
-  100% { filter: brightness(1); }
 }
 .kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 13px; }
 .kv .k { color: var(--text-dim); }
@@ -269,6 +269,20 @@ body {
   animation: angerBob 0.5s ease-in-out infinite alternate;
   filter: drop-shadow(0 2px 5px rgba(0,0,0,0.55));
 }
+/* Gratitude burst: emojis rise from the head, drift sideways, fade */
+.float-emoji {
+  position: absolute;
+  font-size: 20px;
+  pointer-events: none;
+  z-index: 17;
+  animation: emojiRise 2.4s ease-out forwards;
+  filter: drop-shadow(0 2px 5px rgba(0,0,0,0.5));
+}
+@keyframes emojiRise {
+  0%   { transform: translate(-50%, -100%) translate(0, 0) scale(0.7); opacity: 0; }
+  12%  { opacity: 1; transform: translate(-50%, -100%) translate(calc(var(--dx, 0px) * 0.2), -8px) scale(1.05); }
+  100% { transform: translate(-50%, -100%) translate(var(--dx, 0px), -70px) scale(1); opacity: 0; }
+}
 @keyframes angerBob {
   from { transform: translate(-50%, -100%) translateY(0)   scale(1.0); }
   to   { transform: translate(-50%, -100%) translateY(-6px) scale(1.2); }
@@ -402,13 +416,6 @@ body {
 }
 .end-grid .glass { padding: 14px; text-align: center; }
 .end-grid .num   { font-size: 22px; font-weight: 700; }
-.big-score {
-  font-size: 78px; font-weight: 800;
-  margin: 12px 0 4px;
-  color: var(--good);
-  text-shadow: 0 0 30px rgba(61, 220, 132, 0.5);
-  text-align: center;
-}
 .end-actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
 
 /* Save status on the end screen (session → api/submit) */
@@ -673,7 +680,6 @@ body {
   .end-grid .glass { padding: 8px; }
   .end-grid .stat-label { font-size: 9px; }
   .end-grid .num { font-size: 16px; }
-  .big-score { font-size: 48px; margin: 8px 0; }
   .end-actions { flex-direction: column; gap: 8px; align-items: stretch; }
   .end-actions .btn { width: 100%; font-size: 12.5px; padding: 11px 14px; }
 
