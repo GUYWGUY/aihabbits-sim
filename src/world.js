@@ -19,9 +19,9 @@ const COUNTER_BOX = {
 };
 
 // Player "plumbob" marker (Sims-style floating diamond above the head).
-const PLUMBOB_CALM  = new THREE.Color(0x2ee59d); // emerald — normal state
+const PLUMBOB_CALM  = new THREE.Color(0x35ff4d); // Sims green — normal state
 const PLUMBOB_ALARM = new THREE.Color(0xff3b5c); // alarm red — setPlayerAlert(1)
-const PLUMBOB_HOVER = 0.35;                      // gap above the top of the head (m)
+const PLUMBOB_HOVER = 0.38;                      // gap above the top of the head (m)
 const PLUMBOB_SPIN  = 1.2;                       // rad/s around Y
 
 // 'kneel' gesture: forward bend at the hips + knee bend (leg squash).
@@ -251,17 +251,23 @@ export class World {
   // it — _updatePlumbob re-anchors it to the head's world position per frame.
   // -----------------------------------------------------------------------
   _buildPlumbob() {
+    // Two elongated pyramids point to point, ≈1:2.5 wide:tall like the Sims
+    // one. Flat shading keeps the facets crisp; the clearcoat gives the
+    // glassy glint as it spins, and a modest emissive keeps it readable in
+    // shadow without flattening the facets into a solid green blob.
     const geo = new THREE.OctahedronGeometry(1, 0);
-    geo.scale(0.06, 0.10, 0.06); // 0.12 wide × 0.20 tall
-    const mat = new THREE.MeshStandardMaterial({
+    geo.scale(0.085, 0.23, 0.085); // 0.17 wide × 0.46 tall
+    const mat = new THREE.MeshPhysicalMaterial({
       color: PLUMBOB_CALM.clone(),
       emissive: PLUMBOB_CALM.clone(),
-      emissiveIntensity: 0.9,
-      roughness: 0.25,
-      metalness: 0.1,
+      emissiveIntensity: 0.3,
+      roughness: 0.08,
+      metalness: 0.15,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
       flatShading: true,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.96,
     });
     const pb = new THREE.Mesh(geo, mat);
     pb.castShadow = false;
@@ -332,7 +338,7 @@ export class World {
     const mat = pb.material;
     mat.color.copy(PLUMBOB_CALM).lerp(PLUMBOB_ALARM, a);
     mat.emissive.copy(mat.color);
-    mat.emissiveIntensity = 0.9 + a * (0.2 + 1.2 * pulse);
+    mat.emissiveIntensity = 0.3 + a * (0.6 + 1.2 * pulse);
     pb.scale.setScalar(this._plumbobPresence * (1 + a * 0.28 * pulse));
   }
 
@@ -1071,9 +1077,10 @@ export class World {
 
   /**
    * Drop N grocery items as if a bag slipped out of an NPC's hands: items
-   * leave from hand height just in front of the body (in the facing
-   * direction), one after another over ~250-400 ms, fall mostly down and
-   * forward, bounce low, then roll / slide to rest scattered ≈0.5 m ahead.
+   * leave from hand height beside the body, toward the aisle (+X, the side
+   * the camera looks at), one after another over ~250-400 ms, fall mostly
+   * down and outward, bounce low, then roll / slide to rest scattered
+   * ≈0.5-0.9 m from the customer on open floor.
    * Items that haven't left the bag yet are in the scene but invisible
    * until their spawnAtMs.
    */
@@ -1083,9 +1090,12 @@ export class World {
     const ud = npcMesh.userData;
     const feet = new THREE.Vector3(npcMesh.position.x, 0, npcMesh.position.z);
 
-    // Forward = local +Z rotated by the body yaw. If the counter is right in
-    // front (customer at the cashier), turn the drop direction to open floor.
-    const yaw = this._clearDropYaw(feet, npcMesh.rotation.y);
+    // Spill toward the aisle (world +X). That side of the queue is open floor
+    // facing the camera, so the fall and the scattered items are actually
+    // seen; dropping "forward" lands them between two customers, hidden
+    // behind bodies from the camera's viewpoint. _clearDropYaw still turns
+    // away if that spot would be inside the counter.
+    const yaw = this._clearDropYaw(feet, Math.PI / 2 + (Math.random() - 0.5) * 0.5);
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const side = new THREE.Vector3(fwd.z, 0, -fwd.x);
 
