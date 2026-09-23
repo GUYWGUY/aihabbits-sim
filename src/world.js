@@ -1300,8 +1300,11 @@ export class World {
     if (!npcMesh) return 0;
     let delay = 0;
     for (const item of items) {
+      if (item.recovering) continue;                          // already on its way
+      if (item.recoverTimer) clearTimeout(item.recoverTimer); // rescheduled (a helper speeds it up)
       const startDelay = delay;
-      setTimeout(() => {
+      item.recoverTimer = setTimeout(() => {
+        item.recoverTimer = null;
         if (!item.mesh || !item.mesh.parent) return;
         // In front of the receiver's chest, in their facing direction.
         const ry = npcMesh.rotation.y;

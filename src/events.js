@@ -192,6 +192,21 @@ export class EventEngine {
     this.activeDroppedItems = this.world.dropGroceriesAt(at.id, 5);
     this.world.setSpectatorFocus(at.id);
     this.world.gestureCharacter(at.id, 'slump', 1500);
+
+    // The customer starts picking up on their own straight away — slowly, one
+    // item every DROP_SELF_PICKUP_S. The participant's choice only changes
+    // what happens to the rest: HELP speeds it up, COMPLAIN / DO_NOTHING
+    // leave them to it. Nobody stands over spilled groceries doing nothing.
+    const items = this.activeDroppedItems;
+    const selfDelayMs = CONFIG.DROP_SELF_PICKUP_S * 1000;
+    const selfStartMs = 1500;
+    const selfTotalMs = (items.length - 1) * selfDelayMs + 1400 + 200;
+    this.dropSelfDoneAtMs = performance.now() + selfStartMs + selfTotalMs;
+    setTimeout(() => {
+      if (!items.length || !this.gs.activeEvent) return;
+      this.world.gestureCharacter(at.id, 'kneel', selfTotalMs);
+      this.world.recoverItemsToNpc(items, at.id, selfDelayMs, 1400);
+    }, selfStartMs);
     this.world.setEmotion(at.id, 'shocked');
     this.world.setEmotion('PLAYER', 'surprised');
     if (isAtCashier) {
@@ -243,10 +258,13 @@ export class EventEngine {
 
       this.world.setEmotion('PLAYER', 'neutral');
       this.world.playScript('PLAYER', walkToSteps, () => {
-        // Arrived — start item recovery and kneel for the full duration.
-        const totalRecoverMs = items.length * 1100 + 1300 + 200;
-        this.world.recoverItemsToNpc(items, customer.id, 1100, 1300);
+        // Arrived — whatever the customer hasn't reached yet gets picked up
+        // at helping pace; both kneel only as long as that takes.
+        const remaining = items.filter((it) => !it.recovering);
+        const totalRecoverMs = remaining.length * 1100 + 1300 + 200;
+        this.world.recoverItemsToNpc(remaining, customer.id, 1100, 1300);
         this.world.gestureCharacter('PLAYER', 'kneel', totalRecoverMs);
+        this.world.gestureCharacter(customer.id, 'kneel', totalRecoverMs);
         setTimeout(() => this.world.setEmotion(customer.id, 'happy'), totalRecoverMs * 0.55);
 
         // Compute queue position now (frozen during event, safe to read here).
@@ -273,11 +291,12 @@ export class EventEngine {
       this.world.setEmotion(customer.id, 'sad');
       this.world.gestureCharacter('PLAYER', 'shake', 1500);
       this.ui.speech('PLAYER', 'Oh come on!');
-      // Dropper kneels slightly after the player's complaint reaction.
-      const recoverMsComplain = items.length * 1300 + 1100 + 200;
+      // Being shouted at, the customer hurries the rest of the pickup.
+      const remaining = items.filter((it) => !it.recovering);
+      const recoverMsComplain = remaining.length * 1300 + 1100 + 200;
       setTimeout(() => {
-        this.world.gestureCharacter(customer.id, 'kneel', 5000);
-        this.world.recoverItemsToNpc(items, customer.id, 1300, 1100);
+        this.world.gestureCharacter(customer.id, 'kneel', recoverMsComplain);
+        this.world.recoverItemsToNpc(remaining, customer.id, 1300, 1100);
       }, 800);
       // Finish only after the dropper has collected everything.
       setTimeout(() => this._finishEvent(action, prevState), 800 + recoverMsComplain);
@@ -290,12 +309,10 @@ export class EventEngine {
 
       this.world.setEmotion('PLAYER', 'neutral');
       this.world.setEmotion(customer.id, 'sad');
-      const recoverMsDoNothing = items.length * 2100 + 1400 + 200;
-      setTimeout(() => {
-        this.world.gestureCharacter(customer.id, 'kneel', 9000);
-        this.world.recoverItemsToNpc(items, customer.id, 2100, 1400);
-      }, 1000);
-      setTimeout(() => this._finishEvent(action, prevState), 1000 + recoverMsDoNothing);
+      // The customer keeps picking up at their own slow pace; the event ends
+      // when they are done, however far along they already are.
+      const waitMs = Math.max(400, this.dropSelfDoneAtMs - performance.now());
+      setTimeout(() => this._finishEvent(action, prevState), waitMs);
     }
 
     // Cashier penalty only when the dropper is blocking the front of queue.

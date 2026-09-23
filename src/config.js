@@ -44,6 +44,7 @@ export const CONFIG = {
   HELP_DELAY_S: 7,                    // walk over, kneel, pick 5 items, hand back, walk back
   COMPLAIN_DELAY_S: 9,                // customer recovers items themselves while you complain
   DO_NOTHING_DELAY_S: 14,             // customer recovers very slowly, no help
+  DROP_SELF_PICKUP_S: 3.0,            // the dropper picks up one item every N s on their own
   ARGUE_BASE_S: 4,                    // brief but heated argument, cutter leaves
   ARGUE_ESCALATE_S: 10,               // dragged-out shouting match, cutter stays
   OBJECT_GROUP_S: 6,                  // verbal back-and-forth with the friend
