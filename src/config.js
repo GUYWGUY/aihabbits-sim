@@ -27,6 +27,12 @@ export const CONFIG = {
   EVENT_PROB: 1.0,                    // P(trigger | check) - always trigger when check time arrives
   MAX_EVENTS: 12,                     // safety cap
 
+  // ---- decision window (REALTIME only) ----
+  // Once an event fires the participant has this long to choose; then the
+  // passive option is taken for them. The warning kicks in near the end.
+  DECISION_WINDOW_S: 10,
+  DECISION_WARN_S: 4,
+
   // ---- per-event time costs (seconds added to the cashier-front timer) ----
   // Calibrated so the visual + the cashier penalty together feel like the real
   // amount of time the situation would consume in a supermarket queue.

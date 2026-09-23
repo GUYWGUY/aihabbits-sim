@@ -43,12 +43,15 @@ export class EventEngine {
   maybeTrigger() {
     if (this.gs.gameMode === 'SOCIAL_NORMS') return;
     if (this.gs.activeEvent) {
-      if (!this.gs.activeEvent.resolving &&
-          this.gs.elapsedSec - this.gs.activeEvent.startedAt >= 10) {
-        const type = this.gs.activeEvent.type;
-        if (type === 'DROP') this.resolveDrop('DO_NOTHING');
-        else if (type === 'CUTTER') this.resolveCutter('LET_IT_GO');
-        else if (type === 'ISRAELI_QUEUE') this.resolveIsraeliQueue('WAIT');
+      const ev = this.gs.activeEvent;
+      if (!ev.resolving) {
+        const remaining = CONFIG.DECISION_WINDOW_S - (this.gs.elapsedSec - ev.startedAt);
+        this._pushDecisionCountdown(remaining);
+        if (remaining <= 0) {
+          if (ev.type === 'DROP') this.resolveDrop('DO_NOTHING');
+          else if (ev.type === 'CUTTER') this.resolveCutter('LET_IT_GO');
+          else if (ev.type === 'ISRAELI_QUEUE') this.resolveIsraeliQueue('WAIT');
+        }
       }
       return;
     }
@@ -62,6 +65,37 @@ export class EventEngine {
     if (Math.random() > CONFIG.EVENT_PROB) return;
 
     this.triggerRandomEvent();
+  }
+
+  // ---- decision-window countdown -> HUD pill + red plumbob/vignette ----
+  _pushDecisionCountdown(remainingS) {
+    const r = Math.max(0, remainingS);
+    // 0 while there is plenty of time; ramps 0.3 -> 1 over the final seconds so
+    // the plumbob turns red and pulses faster as the window closes.
+    const level = r <= CONFIG.DECISION_WARN_S
+      ? 0.3 + 0.7 * (1 - r / CONFIG.DECISION_WARN_S)
+      : 0;
+    this.ui.setDecisionCountdown(r, level);
+    if (this.world.setPlayerAlert) this.world.setPlayerAlert(level);
+  }
+
+  _clearDecisionCountdown() {
+    this.ui.setDecisionCountdown(null, 0);
+    if (this.world.setPlayerAlert) this.world.setPlayerAlert(0);
+  }
+
+  /**
+   * Claim the active event for resolution. Returns false if there is no event
+   * or it is already being resolved (double click, or the auto-timeout racing
+   * a click), so every resolve* path runs exactly once.
+   */
+  _beginResolve() {
+    const ev = this.gs.activeEvent;
+    if (!ev || ev.resolving) return false;
+    ev.resolving = true;
+    this._clearDecisionCountdown();
+    this.ui.renderLockedAction('⏳ Resolving…');
+    return true;
   }
 
   triggerRandomEvent() {
@@ -160,15 +194,12 @@ export class EventEngine {
   }
 
   resolveDrop(action) {
-    if (!this.gs.activeEvent) return;
+    if (!this._beginResolve()) return;
     const prevState = this.gs.snapshotState();
     const customer = this.gs.activeEvent.npc;
     const isAtCashier = !!this.gs.activeEvent.isAtCashier;
     const items = this.activeDroppedItems || [];
     let delaySec, logKind, msg;
-
-    // Prevent the 10s auto-timeout from firing a second time while we animate.
-    this.gs.activeEvent.resolving = true;
 
     if (action === 'HELP') {
       delaySec = CONFIG.HELP_DELAY_S;
@@ -311,7 +342,7 @@ export class EventEngine {
   }
 
   resolveCutter(action) {
-    if (!this.gs.activeEvent) return;
+    if (!this._beginResolve()) return;
     const prevState = this.gs.snapshotState();
     const cutter = this.gs.activeEvent.cutter;
 
@@ -483,9 +514,12 @@ export class EventEngine {
   }
 
   resolveIsraeliQueue(action) {
-    if (!this.gs.activeEvent) return;
+    if (!this._beginResolve()) return;
     const prevState = this.gs.snapshotState();
     const friend = this.gs.activeEvent.friend;
+    // Captured now: the cashier sequence below outlives the event object, and
+    // this.gs.activeEvent is null by the time its later timeouts fire.
+    const inFront = this.gs.activeEvent.npc;
 
     if (action === 'OBJECT_TO_GROUP') {
       this.gs.addCashierDelay(CONFIG.OBJECT_GROUP_S);
@@ -496,7 +530,7 @@ export class EventEngine {
 
       this.world.setEmotion('PLAYER', 'angry');
       this.world.setEmotion(friend.id, 'angry');
-      this.world.setEmotion(this.gs.activeEvent.npc.id, 'angry');
+      this.world.setEmotion(inFront.id, 'angry');
       this.world.gestureCharacter('PLAYER', 'argue', objectDurationMs * 0.5);
       this.world.gestureCharacter(friend.id, 'argue', objectDurationMs * 0.5);
 
@@ -587,7 +621,7 @@ export class EventEngine {
       }, 2400);
       setTimeout(() => {
         this.world.setEmotion(friend.id, 'sad');
-        this.world.setEmotion(this.gs.activeEvent.npc.id, 'sad');
+        this.world.setEmotion(inFront.id, 'sad');
         this.ui.speech(friend.id, 'But my friend was holding…', 2000);
       }, 4400);
       setTimeout(() => {
@@ -616,6 +650,10 @@ export class EventEngine {
         `🧑‍💼 The cashier intervenes. The current scan is slower (-${CONFIG.COMPLAIN_CASHIER_PENALTY_S}s) but the friend is sent away.`,
         'warn'
       );
+      this.ui.renderLockedAction('🧑‍💼 Cashier is handling it…');
+      // The event is over only once the friend has actually been sent off.
+      setTimeout(() => this._finishEvent(action, prevState), 8600);
+      return;
     } else {
       // WAIT — friend stays directly in front of player.
       this.world.setSpectatorFocus(null);
@@ -638,8 +676,13 @@ export class EventEngine {
   // Shared finalization
   // =======================================================================
   _finishEvent(action, prevState) {
+    // A deferred finish (cashier sequence, long argument, slow pickup) can
+    // outlive the session; once the game has ended there is nothing to
+    // finish and recording anything after TERMINAL would corrupt the log.
+    if (this.gs.finished) return;
     this.gs.decisionsCount++;
     this.gs.activeEvent = null;
+    this._clearDecisionCountdown();
     this.world.setSpectatorFocus(null); // Release camera focus
     // Catch up anyone who was frozen during the event (player + behind).
     this.world.syncQueue(this.gs.queue);

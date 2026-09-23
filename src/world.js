@@ -10,6 +10,25 @@ const QUEUE_SPACING = 1.25;                   // metres between queue spots
 const CASHIER_X = -2.4;                       // counter front edge
 const QUEUE_FRONT_Z = -1.0;                   // first queue position (just in front of counter)
 
+// Active cashier counter footprint (x/z, world) — dropped groceries are kept
+// out of it. Matches the counter top built in _buildCashierStation(0, true).
+const COUNTER_BOX = {
+  minX: CASHIER_X - 1.25, maxX: CASHIER_X + 1.25,
+  minZ: -0.4 - 0.85,      maxZ: -0.4 + 0.85,
+  topY: 1.07,
+};
+
+// Player "plumbob" marker (Sims-style floating diamond above the head).
+const PLUMBOB_CALM  = new THREE.Color(0x2ee59d); // emerald — normal state
+const PLUMBOB_ALARM = new THREE.Color(0xff3b5c); // alarm red — setPlayerAlert(1)
+const PLUMBOB_HOVER = 0.35;                      // gap above the top of the head (m)
+const PLUMBOB_SPIN  = 1.2;                       // rad/s around Y
+
+// 'kneel' gesture: forward bend at the hips + knee bend (leg squash).
+const KNEEL_TILT       = 0.68; // ≈39° torso pitch at full crouch
+const KNEEL_LEG_SQUASH = 0.36; // legs compress to 64% height → hips drop ≈0.24 m
+const KNEEL_RAMP       = 0.12; // fraction of the duration spent easing in / out
+
 export class World {
   constructor(canvas) {
     this.canvas = canvas;
@@ -64,8 +83,12 @@ export class World {
     // dropped grocery items (DROP event) — physics + recovery animation
     this.droppedItems = [];
 
+    // player marker alert level in [0,1] (see setPlayerAlert)
+    this.playerAlert = 0;
+
     this._buildLights();
     this._buildEnvironment();
+    this._buildPlumbob();
 
     window.addEventListener('resize', () => this._onResize());
   }
@@ -219,6 +242,98 @@ export class World {
         bobPhase: Math.random() * Math.PI * 2,
       });
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Player marker: a Sims-style "plumbob" diamond floating above the
+  // player's head. It lives directly in the scene (NOT inside the character
+  // group) so gestures that tilt / squash / lower the character never tilt
+  // it — _updatePlumbob re-anchors it to the head's world position per frame.
+  // -----------------------------------------------------------------------
+  _buildPlumbob() {
+    const geo = new THREE.OctahedronGeometry(1, 0);
+    geo.scale(0.06, 0.10, 0.06); // 0.12 wide × 0.20 tall
+    const mat = new THREE.MeshStandardMaterial({
+      color: PLUMBOB_CALM.clone(),
+      emissive: PLUMBOB_CALM.clone(),
+      emissiveIntensity: 0.9,
+      roughness: 0.25,
+      metalness: 0.1,
+      flatShading: true,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const pb = new THREE.Mesh(geo, mat);
+    pb.castShadow = false;
+    pb.receiveShadow = false;
+    pb.visible = false; // shown once a PLAYER character exists
+    this.scene.add(pb);
+    this.plumbob = pb;
+
+    this._plumbobAlert = 0;       // smoothed alert level actually displayed
+    this._plumbobPulsePhase = 0;  // accumulated so frequency changes don't jump
+    this._plumbobPresence = 0;    // 0..1 grow-in / shrink-out when player appears / leaves
+    this._plumbobAnchor = new THREE.Vector3(); // last known top-of-head position
+  }
+
+  /**
+   * Player marker alarm level, 0..1 (clamped; non-numbers → 0). 0 = calm
+   * green plumbob. >0 blends the colour toward alarm red proportionally and
+   * pulses brightness + size at a rate rising with level (≈1.5 Hz at 0.2 →
+   * 5 Hz at 1.0). Only stores the value — cheap and idempotent, safe to call
+   * every game tick; the visual eases toward it in update().
+   */
+  setPlayerAlert(level) {
+    const v = Number(level);
+    this.playerAlert = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+  }
+
+  _updatePlumbob(dtSec, t) {
+    const pb = this.plumbob;
+    if (!pb) return;
+    const player = this.characterMap.get('PLAYER');
+
+    // Grow in when the player appears; shrink out (at its last position)
+    // once the player mesh is removed after checkout.
+    const presenceTarget = player ? 1 : 0;
+    this._plumbobPresence += (presenceTarget - this._plumbobPresence) * Math.min(1, dtSec * 6);
+    if (!player && this._plumbobPresence < 0.01) {
+      this._plumbobPresence = 0;
+      pb.visible = false;
+      return;
+    }
+
+    if (player) {
+      const head = player.userData.headMesh;
+      if (head) {
+        // World position of the actual head (includes gestures + elderly stoop).
+        head.getWorldPosition(this._plumbobAnchor);
+        this._plumbobAnchor.y += player.userData.headTopOffset ?? 0.2;
+      } else {
+        this._plumbobAnchor.copy(player.position);
+        this._plumbobAnchor.y += 1.9;
+      }
+    }
+
+    pb.visible = true;
+    pb.position.copy(this._plumbobAnchor);
+    pb.position.y += PLUMBOB_HOVER + Math.sin(t * 2.2) * 0.03;
+    // Always perfectly upright: only yaw, set absolutely each frame.
+    pb.rotation.set(0, (t * PLUMBOB_SPIN) % (Math.PI * 2), 0);
+
+    // Alert: ease toward the requested level so step changes don't pop.
+    this._plumbobAlert += (this.playerAlert - this._plumbobAlert) * Math.min(1, dtSec * 5);
+    if (this._plumbobAlert < 0.001) this._plumbobAlert = 0;
+    const a = this._plumbobAlert;
+    const freqHz = 0.625 + 4.375 * a; // 1.5 Hz @ 0.2 → 5 Hz @ 1.0
+    this._plumbobPulsePhase = (this._plumbobPulsePhase + dtSec * freqHz * Math.PI * 2) % (Math.PI * 2);
+    const pulse = 0.5 + 0.5 * Math.sin(this._plumbobPulsePhase); // 0..1
+
+    const mat = pb.material;
+    mat.color.copy(PLUMBOB_CALM).lerp(PLUMBOB_ALARM, a);
+    mat.emissive.copy(mat.color);
+    mat.emissiveIntensity = 0.9 + a * (0.2 + 1.2 * pulse);
+    pb.scale.setScalar(this._plumbobPresence * (1 + a * 0.28 * pulse));
   }
 
   _buildShelves() {
@@ -624,10 +739,7 @@ export class World {
       if (g) {
         const ageMs = nowMs - g.startMs;
         if (ageMs >= g.durationMs) {
-          mesh.rotation.x = 0;
-          mesh.scale.y = 1; // Reset squash
-          if (ra) { ra.rotation.x = ra.userData.baseRotX; ra.rotation.z = ra.userData.baseRotZ; }
-          if (la) { la.rotation.x = la.userData.baseRotX; la.rotation.z = la.userData.baseRotZ; }
+          this._resetGesturePose(mesh);
           delete mesh.userData.gesture;
         } else {
           const phase = ageMs / g.durationMs;
@@ -675,18 +787,44 @@ export class World {
               ra.rotation.z = ra.userData.baseRotZ + Math.sin(phase * Math.PI * 8) * 0.5;
             }
           } else if (g.kind === 'kneel') {
-            // Lean forward (negative x = head toward floor), hold, rise.
-            const dip = (phase < 0.12) ? (phase / 0.12) : (phase > 0.88) ? ((1 - phase) / 0.12) : 1;
-            mesh.rotation.x = -dip * 0.6;
-            // Squash vertically to fake bending knees
-            mesh.scale.y = 1 - dip * 0.3;
-            mesh.position.y = -dip * 0.24; // Move down to keep feet on the floor
-            if (ra && la) {
-              // Arms hang slightly forward with small alternating grab motion.
-              const grab = Math.sin(phase * Math.PI * 6) * 0.22;
-              ra.rotation.x = -0.28 + grab;
-              la.rotation.x = -0.28 - grab;
+            // Crouch to pick things up off the floor. The outer group stays
+            // upright; the legs compress from the floor up (knee bend) which
+            // lowers the hips, and the upper body (torso + head + arms)
+            // pitches forward around the hip pivot. Eases in over the first
+            // KNEEL_RAMP of the duration, holds, then eases back up.
+            const env = phase < KNEEL_RAMP ? phase / KNEEL_RAMP
+                      : phase > 1 - KNEEL_RAMP ? (1 - phase) / KNEEL_RAMP
+                      : 1;
+            const dip = easeInOut(Math.min(1, Math.max(0, env)));
+            const ub = mesh.userData.upperBody;
+            const legs = mesh.userData.legs;
+            let hipDrop = 0;
+            if (legs && ub && mesh.userData.canCrouch) {
+              // Squash legs about their bottom so the feet stay planted.
+              const k = 1 - dip * KNEEL_LEG_SQUASH;
+              const bulge = 1 + dip * 0.22; // thighs/knees read wider when bent
+              legs.scale.set(bulge, k, bulge);
+              legs.position.y = legs.userData.bottomY + legs.userData.halfLen * k;
+              hipDrop = (ub.userData.baseY - legs.userData.bottomY) * (1 - k);
             }
+            if (ub) {
+              ub.position.y = ub.userData.baseY - hipDrop;
+              ub.rotation.x = dip * KNEEL_TILT; // +x = lean forward (+Z is facing)
+            }
+            // Arms: counter-rotate the torso pitch so they hang toward the
+            // floor, reach a little further forward, and alternate a small
+            // scooping grab (~1.2 Hz, time-based so long kneels don't crawl).
+            // A parent cradling a baby keeps both arms on it and only leans down.
+            const grab = Math.sin(ageMs * 0.0075) * 0.20;
+            const reachX = -(KNEEL_TILT + 0.40);
+            const reachArm = (arm, sign) => {
+              const bx = arm.userData.baseRotX, bz = arm.userData.baseRotZ;
+              const tz = arm.userData.restRotZ * 0.4; // hands a bit closer together
+              arm.rotation.x = bx + (reachX + sign * grab - bx) * dip;
+              arm.rotation.z = bz + (tz - bz) * dip;
+            };
+            if (ra && !mesh.userData.babyMesh) reachArm(ra, 1);
+            if (la && !mesh.userData.babyMesh) reachArm(la, -1);
           } else if (g.kind === 'argue') {
             // Sustained argument: slow body sway + forward lean + periodic arm jab.
             // Deliberately slow (3–4 cycles) so it reads as intentional anger, not dancing.
@@ -830,16 +968,19 @@ export class World {
       }
     }
 
-    // -- dropped grocery items: gravity + bounce, or recovery arc --
+    // -- dropped grocery items: recovery arc (overrides physics, even for
+    // items still in the air), else staggered spawn → fall → low bounce →
+    // roll / slide on the floor → settle in a resting pose. --
     for (let i = this.droppedItems.length - 1; i >= 0; i--) {
       const item = this.droppedItems[i];
       if (item.recovering) {
+        item.mesh.visible = true;
         const elapsed = nowMs - item.recoverStartMs;
         const tt = Math.min(1, elapsed / item.recoverDurationMs);
         const ee = tt * tt * (3 - 2 * tt); // smoothstep
         const linear = new THREE.Vector3().lerpVectors(item.recoverFrom, item.recoverTo, ee);
-        // arc through air
-        linear.y += Math.sin(tt * Math.PI) * 0.7;
+        // arc through air (height computed from the actual start point)
+        linear.y += Math.sin(tt * Math.PI) * (item.recoverArc ?? 0.7);
         item.mesh.position.copy(linear);
         item.mesh.rotation.x += dtSec * 4;
         item.mesh.rotation.y += dtSec * 3;
@@ -852,30 +993,14 @@ export class World {
           }
         }
       } else if (!item.settled) {
-        const p = item.physics;
-        p.vy -= 9.8 * dtSec;
-        item.mesh.position.x += p.vx * dtSec;
-        item.mesh.position.y += p.vy * dtSec;
-        item.mesh.position.z += p.vz * dtSec;
-        item.mesh.rotation.x += p.rotX * dtSec;
-        item.mesh.rotation.y += p.rotY * dtSec;
-        item.mesh.rotation.z += p.rotZ * dtSec;
-        if (item.mesh.position.y <= 0.06) {
-          item.mesh.position.y = 0.06;
-          p.vy = -p.vy * 0.3;
-          p.vx *= 0.5;
-          p.vz *= 0.5;
-          p.rotX *= 0.4; p.rotY *= 0.4; p.rotZ *= 0.4;
-          if (Math.abs(p.vy) < 0.4) {
-            item.settled = true;
-            p.vy = 0;
-            // align flat-ish on floor
-            item.mesh.rotation.x = Math.round(item.mesh.rotation.x / Math.PI) * Math.PI;
-            item.mesh.rotation.z = 0;
-          }
-        }
+        if (nowMs < item.spawnAtMs) continue; // still in the bag
+        item.mesh.visible = true;
+        this._stepDroppedItem(item, Math.min(dtSec, 0.05));
       }
     }
+
+    // -- player plumbob (after gestures so it tracks the posed head) --
+    this._updatePlumbob(dtSec, t);
 
     // -- dynamic camera follow: focus midpoint of (cashier-customer, player),
     // biased toward the cashier so it stays firmly anchored to the front. --
@@ -944,31 +1069,72 @@ export class World {
   // Visual hooks called from events.js
   // =======================================================================
 
-  /** Drop N grocery items from an NPC's chest with random scatter velocities. */
+  /**
+   * Drop N grocery items as if a bag slipped out of an NPC's hands: items
+   * leave from hand height just in front of the body (in the facing
+   * direction), one after another over ~250-400 ms, fall mostly down and
+   * forward, bounce low, then roll / slide to rest scattered ≈0.5 m ahead.
+   * Items that haven't left the bag yet are in the scene but invisible
+   * until their spawnAtMs.
+   */
   dropGroceriesAt(npcId, count = 5) {
-    const headPos = this.getCharacterHeadPos(npcId);
-    if (!headPos) return [];
-    const origin = headPos.clone();
-    origin.y -= 0.5;
-    
-    // Shift origin slightly forward (towards -Z) so they drop in front of the character,
-    // aligning perfectly with the forward-bending pickup animation.
-    origin.z -= 0.2;
-    
+    const npcMesh = this.characterMap.get(npcId);
+    if (!npcMesh) return [];
+    const ud = npcMesh.userData;
+    const feet = new THREE.Vector3(npcMesh.position.x, 0, npcMesh.position.z);
+
+    // Forward = local +Z rotated by the body yaw. If the counter is right in
+    // front (customer at the cashier), turn the drop direction to open floor.
+    const yaw = this._clearDropYaw(feet, npcMesh.rotation.y);
+    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    const side = new THREE.Vector3(fwd.z, 0, -fwd.x);
+
+    // Hands carrying a bag sit a little above the relaxed hanging height
+    // (adult ≈0.88; shorter for youth / stooped elderly).
+    const handY = Math.min(0.92, Math.max(0.6, (ud.handY ?? 0.84) + 0.06));
+    const frontR = ud.bodyFrontR ?? 0.3; // body (+belly / wheelchair legs) extent ahead
+    const nowMs = performance.now();
+    const spreadMs = 250 + Math.random() * 150;
+
     const items = [];
     for (let i = 0; i < count; i++) {
       const mesh = buildGroceryItem();
-      mesh.position.copy(origin);
+      const shape = mesh.userData.shape;
+      const lateral = (Math.random() - 0.5) * 0.24; // position within the bag
+      mesh.position.copy(feet)
+        .addScaledVector(fwd, frontR + 0.14 + Math.random() * 0.06)
+        .addScaledVector(side, lateral);
+      mesh.position.y = handY + Math.random() * 0.05;
+      mesh.rotation.set(
+        (Math.random() - 0.5) * 0.6,
+        Math.random() * Math.PI * 2,
+        (Math.random() - 0.5) * 0.6
+      );
+      mesh.visible = false;
       this.scene.add(mesh);
+
+      // Mostly down + forward, a little sideways fan-out, tiny upward pop.
+      const vFwd = 0.20 + Math.random() * 0.30;
+      const vSide = lateral * 1.5 + (Math.random() - 0.5) * 0.5;
       const item = {
         mesh,
         physics: {
-          vx: (Math.random() - 0.5) * 0.6, // tighter horizontal scatter
-          vy: 0.5 + Math.random() * 0.4,   // lower upward hop, drops more directly
-          vz: (Math.random() - 0.5) * 0.4, // tighter forward/backward scatter
-          rotX: (Math.random() - 0.5) * 7,
-          rotY: (Math.random() - 0.5) * 7,
-          rotZ: (Math.random() - 0.5) * 7,
+          vx: fwd.x * vFwd + side.x * vSide,
+          vy: -0.15 + Math.random() * 0.35,
+          vz: fwd.z * vFwd + side.z * vSide,
+          rotX: (Math.random() - 0.5) * 5,
+          rotY: (Math.random() - 0.5) * 3,
+          rotZ: (Math.random() - 0.5) * 5,
+          ...GROCERY_PHYSICS[shape],
+          radius: mesh.userData.radius,
+          grounded: false,
+          blend: 0,
+          rollAngle: 0,
+          touchQuat: null,
+          restQuat: null,
+          ownerX: feet.x,
+          ownerZ: feet.z,
+          ownerR: frontR,
         },
         settled: false,
         recovering: false,
@@ -976,7 +1142,9 @@ export class World {
         recoverTo: null,
         recoverStartMs: 0,
         recoverDurationMs: 600,
+        spawnAtMs: nowMs + (count > 1 ? (i / (count - 1)) * spreadMs : 0),
       };
+      if (shape === 'sphere') item.physics.contactY = item.physics.restY = mesh.userData.radius;
       this.droppedItems.push(item);
       items.push(item);
     }
@@ -984,8 +1152,137 @@ export class World {
   }
 
   /**
-   * Animate the given items lifting from the floor back to an NPC's hands,
-   * one at a time with staggered start.
+   * Pick a drop direction: the body's facing yaw, unless the landing zone
+   * would be inside the cashier counter, in which case try turning left /
+   * right. Returns a world yaw (same convention as rotation.y).
+   */
+  _clearDropYaw(feet, yaw) {
+    const offsets = [0, -Math.PI / 4, Math.PI / 4, -Math.PI / 2, Math.PI / 2, Math.PI];
+    const probe = new THREE.Vector3();
+    for (const off of offsets) {
+      const y = yaw + off;
+      probe.set(feet.x + Math.sin(y) * 0.8, 0, feet.z + Math.cos(y) * 0.8);
+      const m = 0.15;
+      const inCounter = probe.x > COUNTER_BOX.minX - m && probe.x < COUNTER_BOX.maxX + m &&
+                        probe.z > COUNTER_BOX.minZ - m && probe.z < COUNTER_BOX.maxZ + m;
+      if (!inCounter) return y;
+    }
+    return yaw;
+  }
+
+  /** One physics step for a dropped item that has left the bag. */
+  _stepDroppedItem(item, dt) {
+    const p = item.physics;
+    const m = item.mesh;
+
+    if (!p.grounded) {
+      // -- airborne: gravity + gentle tumble --
+      p.vy -= 9.8 * dt;
+      m.position.x += p.vx * dt;
+      m.position.y += p.vy * dt;
+      m.position.z += p.vz * dt;
+      m.rotation.x += p.rotX * dt;
+      m.rotation.y += p.rotY * dt;
+      m.rotation.z += p.rotZ * dt;
+      if (m.position.y <= p.contactY) {
+        m.position.y = p.contactY;
+        if (p.vy < -0.6) {
+          // low bounce: most energy is absorbed, horizontal speed bleeds off
+          p.vy = -p.vy * p.restitution;
+          p.vx *= p.impactKeep;
+          p.vz *= p.impactKeep;
+          p.rotX *= 0.5; p.rotY *= 0.5; p.rotZ *= 0.5;
+        } else {
+          // touchdown: switch to rolling / sliding on the floor
+          p.grounded = true;
+          p.vy = 0;
+          p.touchQuat = m.quaternion.clone();
+          p.restQuat = groceryRestQuat(m.userData.shape, p.touchQuat, p.vx, p.vz);
+          // roll direction: the lying axis may point either way along up × v
+          _tmpAxis.copy(_Y_AXIS).applyQuaternion(p.restQuat);
+          p.rollSign = (_tmpAxis.x * p.vz - _tmpAxis.z * p.vx) >= 0 ? 1 : -1;
+        }
+      }
+    } else {
+      // -- on the floor: friction decay, ease into the resting pose --
+      const speed = Math.hypot(p.vx, p.vz);
+      const decay = Math.exp(-p.friction * dt);
+      p.vx *= decay;
+      p.vz *= decay;
+      m.position.x += p.vx * dt;
+      m.position.z += p.vz * dt;
+      p.blend = Math.min(1, p.blend + dt / 0.22);
+      const eb = easeInOut(p.blend);
+      m.position.y = p.contactY + (p.restY - p.contactY) * eb;
+
+      if (m.userData.shape === 'sphere') {
+        // roll about the horizontal axis perpendicular to travel (up × v)
+        if (speed > 1e-4) {
+          _tmpAxis.set(p.vz / speed, 0, -p.vx / speed);
+          _tmpQuat.setFromAxisAngle(_tmpAxis, speed * dt / p.radius);
+          m.quaternion.premultiply(_tmpQuat);
+        }
+      } else {
+        // cans / bottles roll about their own (now horizontal) axis;
+        // boxes just slide into their flat pose.
+        if (p.rollR > 0) p.rollAngle += p.rollSign * speed * dt / p.rollR;
+        _tmpQuat.setFromAxisAngle(_Y_AXIS, p.rollAngle);
+        _tmpQuat2.copy(p.restQuat).multiply(_tmpQuat);
+        m.quaternion.slerpQuaternions(p.touchQuat, _tmpQuat2, eb);
+      }
+
+      if (p.blend >= 1 && speed < 0.03) {
+        item.settled = true;
+        p.vx = p.vz = 0;
+        m.position.y = p.restY;
+      }
+    }
+
+    this._keepDropClear(item);
+  }
+
+  /**
+   * Keep a dropped item out of its owner's body (vertical cylinder around
+   * where they stood) and out of the cashier counter.
+   */
+  _keepDropClear(item) {
+    const p = item.physics;
+    const pos = item.mesh.position;
+    const r = p.radius;
+
+    // owner's body
+    const dx = pos.x - p.ownerX;
+    const dz = pos.z - p.ownerZ;
+    const d = Math.hypot(dx, dz);
+    const minD = p.ownerR + r;
+    if (d < minD && d > 1e-4) {
+      const nx = dx / d, nz = dz / d;
+      pos.x = p.ownerX + nx * minD;
+      pos.z = p.ownerZ + nz * minD;
+      const vn = p.vx * nx + p.vz * nz;
+      if (vn < 0) { p.vx -= vn * nx; p.vz -= vn * nz; }
+    }
+
+    // cashier counter (only matters below the counter top)
+    if (pos.y < COUNTER_BOX.topY) {
+      const minX = COUNTER_BOX.minX - r, maxX = COUNTER_BOX.maxX + r;
+      const minZ = COUNTER_BOX.minZ - r, maxZ = COUNTER_BOX.maxZ + r;
+      if (pos.x > minX && pos.x < maxX && pos.z > minZ && pos.z < maxZ) {
+        // push out along the axis of least penetration, damped reflection
+        const pens = [pos.x - minX, maxX - pos.x, pos.z - minZ, maxZ - pos.z];
+        const k = pens.indexOf(Math.min(...pens));
+        if (k === 0) { pos.x = minX; p.vx = -Math.abs(p.vx) * 0.2; }
+        else if (k === 1) { pos.x = maxX; p.vx = Math.abs(p.vx) * 0.2; }
+        else if (k === 2) { pos.z = minZ; p.vz = -Math.abs(p.vz) * 0.2; }
+        else { pos.z = maxZ; p.vz = Math.abs(p.vz) * 0.2; }
+      }
+    }
+  }
+
+  /**
+   * Animate the given items lifting from wherever they currently are (floor,
+   * or still falling) back to an NPC's hands, one at a time with staggered
+   * start. Recovery overrides any in-progress physics.
    * @returns total animation duration (ms).
    */
   recoverItemsToNpc(items, toNpcId, perItemDelayMs = 350, perItemDurationMs = 600) {
@@ -996,14 +1293,22 @@ export class World {
       const startDelay = delay;
       setTimeout(() => {
         if (!item.mesh || !item.mesh.parent) return;
+        // In front of the receiver's chest, in their facing direction.
+        const ry = npcMesh.rotation.y;
         const target = new THREE.Vector3(
-          npcMesh.position.x,
-          (npcMesh.userData.headY || 1.4) - 0.3,
-          npcMesh.position.z + 0.15
+          npcMesh.position.x + Math.sin(ry) * 0.25,
+          (npcMesh.userData.headY || 1.4) * 0.65,
+          npcMesh.position.z + Math.cos(ry) * 0.25
         );
+        const from = item.mesh.position.clone();
         item.recovering = true;
-        item.recoverFrom = item.mesh.position.clone();
+        item.mesh.visible = true;     // may not have left the bag yet
+        item.recoverFrom = from;
         item.recoverTo = target;
+        // Arc peaks a bit above the higher endpoint, measured from the actual
+        // start — so floor items get a real lift and mid-air ones don't loop.
+        const peakY = Math.max(from.y, target.y) + 0.25;
+        item.recoverArc = Math.max(0.1, peakY - (from.y + target.y) / 2);
         item.recoverStartMs = performance.now();
         item.recoverDurationMs = perItemDurationMs;
       }, startDelay);
@@ -1035,11 +1340,40 @@ export class World {
     if (mesh) delete mesh.userData.script;
   }
 
-  /** Trigger a brief gesture animation on a character ('shake', 'slump', 'point', 'head-shake', 'dismissive'). */
+  /** Trigger a brief gesture animation on a character ('shake', 'slump', 'point', 'head-shake', 'dismissive', 'wave', 'kneel', 'argue'). */
   gestureCharacter(npcId, kind = 'shake', durationMs = 800) {
     const mesh = this.characterMap.get(npcId);
     if (!mesh) return;
+    // A gesture interrupted mid-way would otherwise leave its pose behind
+    // (e.g. a half crouch) since the next gesture may not touch those parts.
+    if (mesh.userData.gesture) this._resetGesturePose(mesh);
     mesh.userData.gesture = { kind, startMs: performance.now(), durationMs };
+  }
+
+  /**
+   * Restore every transform any gesture animates to its rest value. Leaves
+   * the inner group alone, so the elderly stoop is preserved.
+   */
+  _resetGesturePose(mesh) {
+    const ud = mesh.userData;
+    mesh.rotation.x = 0;
+    mesh.rotation.z = 0;
+    mesh.scale.y = 1;
+    for (const arm of [ud.rightArm, ud.leftArm]) {
+      if (!arm) continue;
+      arm.rotation.x = arm.userData.baseRotX;
+      arm.rotation.z = arm.userData.baseRotZ;
+    }
+    const ub = ud.upperBody;
+    if (ub) {
+      ub.rotation.x = 0;
+      ub.position.y = ub.userData.baseY;
+    }
+    const legs = ud.legs;
+    if (legs) {
+      legs.scale.set(1, 1, 1);
+      legs.position.y = legs.userData.baseY;
+    }
   }
 
   /** Brief cashier turn-and-look gesture (for COMPLAIN_TO_CASHIER). */
@@ -1241,12 +1575,23 @@ export function buildCharacter(profile) {
   legs.castShadow = true;
   inner.add(legs);
 
+  // Upper body: torso, head, arms (and belly / held baby) hang off a hip
+  // pivot so the 'kneel' gesture can bend forward at the waist while the
+  // legs stay planted. Children are positioned relative to hipY; the
+  // *AbsY values below are in inner-group space (feet at y≈0).
+  const hipY = profile.state === 'Disabled' ? 0.45 : legH + 0.10;
+  const upperBody = new THREE.Group();
+  upperBody.position.y = hipY;
+  upperBody.userData.baseY = hipY;
+  inner.add(upperBody);
+
   // Body
   const body = new THREE.Mesh(
     new THREE.CapsuleGeometry(bodyR, bodyH, 6, 12),
     new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.7, metalness: 0.0 })
   );
-  body.position.y = legH + 0.05 + bodyH / 2 + bodyR * 0.6;
+  const bodyAbsY = legH + 0.05 + bodyH / 2 + bodyR * 0.6;
+  body.position.y = bodyAbsY - hipY;
   body.castShadow = true;
   
   if (profile.age === 'Youth') {
@@ -1258,38 +1603,40 @@ export function buildCharacter(profile) {
     body.add(stripe);
   }
   
-  inner.add(body);
+  upperBody.add(body);
 
   // Head with a CanvasTexture face (LEGO-like). Painted once at construction
   // and re-painted on emotion changes via World#setEmotion.
   const faceData = createFaceTexture(skinHex, profile);
   const headMat = new THREE.MeshStandardMaterial({ map: faceData.texture, roughness: 0.55 });
   const head = new THREE.Mesh(new THREE.SphereGeometry(headR, 24, 20), headMat);
-  head.position.y = body.position.y + bodyH / 2 + bodyR * 0.6 + headR * 0.95;
+  const headAbsY = bodyAbsY + bodyH / 2 + bodyR * 0.6 + headR * 0.95;
+  head.position.y = headAbsY - hipY;
   head.castShadow = true;
-  inner.add(head);
+  upperBody.add(head);
 
   // Arms — built as Group(shoulder pivot) → Mesh(arm hanging down). Rotating
   // the group rotates the whole arm around the shoulder, letting us animate
   // realistic hand/arm gestures (point, wave, hands-on-hips, etc.) per event.
   const armMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.7 });
-  const shoulderY = body.position.y + bodyH / 2 + 0.15;
+  const shoulderAbsY = bodyAbsY + bodyH / 2 + 0.15;
   let armL = 0.55, armR = 0.10;
   if (profile.age === 'Youth') { armL = 0.35; armR = 0.07; }
 
   for (const side of [-1, 1]) {
     const armGroup = new THREE.Group();
-    armGroup.position.set(side * (bodyR + 0.10), shoulderY, 0);
+    armGroup.position.set(side * (bodyR + 0.10), shoulderAbsY - hipY, 0);
     armGroup.rotation.z = side * 0.08;
     armGroup.userData.baseRotX = 0;
     armGroup.userData.baseRotZ = side * 0.08;
+    armGroup.userData.restRotZ = side * 0.08; // natural hang (baseRotZ may be overridden)
 
     const arm = new THREE.Mesh(new THREE.CapsuleGeometry(armR, armL, 4, 8), armMat);
     arm.position.y = -armL / 2;
     arm.castShadow = true;
     armGroup.add(arm);
 
-    inner.add(armGroup);
+    upperBody.add(armGroup);
     if (side === -1) group.userData.leftArm = armGroup;
     else group.userData.rightArm = armGroup;
   }
@@ -1313,7 +1660,7 @@ export function buildCharacter(profile) {
     );
     belly.position.set(0, body.position.y - 0.05, bodyR * 0.55);
     belly.castShadow = true;
-    inner.add(belly);
+    upperBody.add(belly);
   }
 
   // Elderly accessories: walking cane (the hat is gone — replaced by hair,
@@ -1409,7 +1756,7 @@ export function buildCharacter(profile) {
       baby.position.set(0, body.position.y + 0.16, bodyR + 0.03); // baby sitting exactly on hands
       baby.rotation.z = Math.PI / 2.2; // lying horizontally, slight tilt up
       baby.rotation.x = -0.2; // leaning against chest
-      inner.add(baby);
+      upperBody.add(baby);    // (body.position.y is already hip-relative)
     } else {
       // Kid in tow
       const kid = buildCharacter({ age: 'Youth', gender: Math.random() < 0.5 ? 'M' : 'F' });
@@ -1437,32 +1784,32 @@ export function buildCharacter(profile) {
     inner.position.y = -0.04;    // small drop to land legs on the floor
   }
 
-  // Player highlight ring + glow column (added to OUTER group so it stays flat
-  // on the floor, unaffected by inner's stoop tilt).
-  if (profile.isPlayer) {
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.42, 0.55, 48),
-      new THREE.MeshBasicMaterial({
-        color: 0x29d4c4, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
-      })
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.04;
-    group.add(ring);
-    const glow = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.55, 0.55, 0.05, 32),
-      new THREE.MeshBasicMaterial({ color: 0x29d4c4, transparent: true, opacity: 0.18 })
-    );
-    glow.position.y = 0.025;
-    group.add(glow);
-  }
+  // (The player marker is no longer built here: World owns a scene-level
+  // "plumbob" that tracks the PLAYER's head — see World#_buildPlumbob.)
+
+  // Rest values for the 'kneel' crouch: legs squash about their bottom.
+  const legHalfLen = legH / 2 + 0.16; // capsule half-length incl. end caps
+  legs.userData.baseY = legs.position.y;
+  legs.userData.halfLen = legHalfLen;
+  legs.userData.bottomY = legs.position.y - legHalfLen;
 
   // Bookkeeping for emotion repaint, head-tracking, and HUD anchor positions.
+  const innerScale = isElderly ? 0.88 : 1.0;
   group.userData.faceData = faceData;
   group.userData.skinHex = skinHex;
   group.userData.profile = profile;
   group.userData.headMesh = head;
-  group.userData.headY = head.position.y * (isElderly ? 0.88 : 1.0);
+  group.userData.headY = headAbsY * innerScale;
+  group.userData.headTopOffset = headR * innerScale;                // head centre → top of head
+  group.userData.handY = (shoulderAbsY - armL - armR) * innerScale; // hanging-hand height
+  // How far the body extends ahead of the feet (drop spawn clearance).
+  group.userData.bodyFrontR = (profile.state === 'Disabled' ? 0.55
+                             : isPregnant ? bodyR * 1.5 + 0.03
+                             : group.userData.babyMesh ? bodyR + 0.14
+                             : bodyR + 0.02) * innerScale;
+  group.userData.upperBody = upperBody;
+  group.userData.legs = legs;
+  group.userData.canCrouch = profile.state !== 'Disabled'; // wheelchair: lean only
   group.userData.bobPhase = Math.random() * Math.PI * 2;
   group.userData.currentEmotion = 'neutral';
 
@@ -1704,32 +2051,112 @@ function shortestAngleDiff(from, to) {
 }
 
 // Procedural grocery item — varied shapes (fruit, can, carton) for visual variety.
+// userData.shape selects the drop physics (GROCERY_PHYSICS); userData.radius
+// is the item's horizontal clearance radius and, for spheres, the roll radius.
 function buildGroceryItem() {
   const r = Math.random();
-  let geo, color;
+  let geo, color, shape, radius;
   if (r < 0.30) {
     // fruit (sphere)
     color = pick([0xff6b6b, 0xff9100, 0xfee440, 0x9bc53d, 0x6b3f1a]);
-    geo = new THREE.SphereGeometry(0.085 + Math.random() * 0.025, 12, 12);
+    radius = 0.085 + Math.random() * 0.025;
+    geo = new THREE.SphereGeometry(radius, 12, 12);
+    shape = 'sphere';
   } else if (r < 0.55) {
     // can (cylinder)
     color = pick([0x118ab2, 0xef476f, 0x06d6a0, 0xd1495b, 0xfdd85d]);
     geo = new THREE.CylinderGeometry(0.07, 0.07, 0.18, 14);
+    shape = 'can';
+    radius = 0.09;
   } else if (r < 0.80) {
     // carton / box
     color = pick([0xffffff, 0xffeb99, 0xff9aa2, 0xa1c181]);
     geo = new THREE.BoxGeometry(0.16, 0.20, 0.13);
+    shape = 'box';
+    radius = 0.10;
   } else {
     // bottle (taller cylinder)
     color = pick([0x4ecdc4, 0xc94aff, 0x4a6cf7, 0xff7b00]);
     geo = new THREE.CylinderGeometry(0.05, 0.06, 0.22, 12);
+    shape = 'bottle';
+    radius = 0.11;
   }
   const mesh = new THREE.Mesh(
     geo,
     new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.05 })
   );
   mesh.castShadow = true;
+  mesh.userData.shape = shape;
+  mesh.userData.radius = radius;
   return mesh;
+}
+
+// Per-shape drop physics.
+//   contactY    — centre height at floor contact while tumbling (≈ half extent)
+//   restY       — centre height in the final resting pose (exactly on the floor)
+//   restitution — vertical bounce factor (low: groceries don't bounce much)
+//   impactKeep  — horizontal speed kept per bounce
+//   friction    — exponential decay rate of floor speed (1/s): round things roll further
+//   rollR       — roll radius about the item's own axis (0 = slides, no roll)
+// Spheres override contactY/restY with their actual radius at drop time.
+const GROCERY_PHYSICS = {
+  sphere: { contactY: 0.10, restY: 0.10, restitution: 0.26, impactKeep: 0.85, friction: 2.0, rollR: 0 },
+  can:    { contactY: 0.09, restY: 0.07, restitution: 0.18, impactKeep: 0.75, friction: 2.2, rollR: 0.07 },
+  bottle: { contactY: 0.10, restY: 0.055, restitution: 0.16, impactKeep: 0.65, friction: 3.2, rollR: 0.055 },
+  box:    { contactY: 0.10, restY: 0.065, restitution: 0.12, impactKeep: 0.45, friction: 7.0, rollR: 0 },
+};
+
+// Scratch objects for per-frame grocery rolling (avoid allocations).
+const _Y_AXIS = new THREE.Vector3(0, 1, 0);
+const _tmpAxis = new THREE.Vector3();
+const _tmpQuat = new THREE.Quaternion();
+const _tmpQuat2 = new THREE.Quaternion();
+
+/**
+ * Resting orientation for a grocery item that just touched down, chosen
+ * close to its current orientation so the settle blend is a small turn:
+ *   box    — largest face down (local Z vertical), keeping its current heading
+ *   can / bottle — lying on its side, axis perpendicular to travel (so it rolls)
+ *   sphere — unchanged (rolling is applied incrementally)
+ */
+function groceryRestQuat(shape, touchQuat, vx, vz) {
+  if (shape === 'sphere') return touchQuat.clone();
+  const qYaw = new THREE.Quaternion();
+  const qLay = new THREE.Quaternion();
+  const candidates = [];
+  if (shape === 'box') {
+    // heading from the box's local X projected on the floor
+    const xAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(touchQuat);
+    const yaw = Math.atan2(-xAxis.z, xAxis.x);
+    qYaw.setFromAxisAngle(_Y_AXIS, yaw);
+    for (const a of [Math.PI / 2, -Math.PI / 2]) {
+      qLay.setFromAxisAngle(new THREE.Vector3(1, 0, 0), a);
+      candidates.push(qYaw.clone().multiply(qLay));
+    }
+  } else {
+    // local Y (cylinder axis) → horizontal, then yaw so the axis is
+    // perpendicular to travel: axis = up × v̂ (if barely moving, keep heading).
+    const speed = Math.hypot(vx, vz);
+    let yaw;
+    if (speed > 0.02) {
+      yaw = Math.atan2(-vx / speed, -vz / speed);
+    } else {
+      const yAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(touchQuat);
+      yaw = Math.atan2(yAxis.z, -yAxis.x);
+    }
+    qLay.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    for (const y of [yaw, yaw + Math.PI]) {
+      qYaw.setFromAxisAngle(_Y_AXIS, y);
+      candidates.push(qYaw.clone().multiply(qLay));
+    }
+  }
+  // pick the candidate needing the smallest rotation from the current pose
+  let best = candidates[0], bestDot = -1;
+  for (const q of candidates) {
+    const d = Math.abs(q.dot(touchQuat));
+    if (d > bestDot) { bestDot = d; best = q; }
+  }
+  return best;
 }
 
 function makeSignTexture(text) {

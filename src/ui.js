@@ -84,6 +84,7 @@ export class UI {
         <div class="glass event-banner" id="eventBanner">
           <span class="ico">⚠️</span>
           <div id="eventBannerText">An event is happening!</div>
+          <span class="countdown" id="eventCountdown" style="display:none"></span>
         </div>
 
         <div class="glass actions">
@@ -109,6 +110,7 @@ export class UI {
     this.actionGridEl = document.getElementById('actionGrid');
     this.bannerEl = document.getElementById('eventBanner');
     this.bannerTextEl = document.getElementById('eventBannerText');
+    this.countdownEl = document.getElementById('eventCountdown');
     this.logEl = document.getElementById('log');
     this.vignetteEl = document.getElementById('vignette');
 
@@ -199,10 +201,10 @@ export class UI {
     return `
       <h1>Stand in line. Make decisions.</h1>
       <p>You play one customer in a busy supermarket queue. This session is about social norms only:
-         there is <strong>no timer and no time penalty</strong>. You will face
-         <strong>20 consecutive scenarios</strong> — take as long as you need on each one.</p>
+         there is <strong>no timer and no time penalty</strong>. Take as long as you
+         need on each scenario.</p>
       <ul class="rules" style="margin-top:20px;">
-        <li><span class="ico">🙋</span><div><strong>Goal:</strong> Respond to all 20 scenarios the way you actually would in a real queue.</div></li>
+        <li><span class="ico">🙋</span><div><strong>Goal:</strong> Respond to each scenario the way you actually would in a real queue.</div></li>
         <li><span class="ico">🧘</span><div><strong>No rush:</strong> The clock never runs and you never lose points for thinking.</div></li>
         <li><span class="ico">⚠️</span><div><strong>Interruptions:</strong> Drops, line-cutters and friends jumping in — each one forces you to choose.</div></li>
         <li><span class="ico">🧓</span><div><strong>Mixed crowd:</strong> Youth, adults, elderly, pregnant, disabled — different reactions are expected.</div></li>
@@ -219,7 +221,7 @@ export class UI {
       <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
       <div class="stat"><span>Time penalty</span><strong>−${CONFIG.TIME_PENALTY_PER_SEC} / sec</strong></div>
       <div class="stat"><span>Avg. checkout time</span><strong>${CONFIG.CASHIER_MEAN_S}s (σ=${CONFIG.CASHIER_SD_S})</strong></div>
-      <div class="stat"><span>Approx. duration</span><strong>~5 min (max 10)</strong></div>
+      <div class="stat"><span>Approx. duration</span><strong>~5 min</strong></div>
       <div class="stat"><span>Initial position</span><strong>~#${avgStart} in line</strong></div>
     `;
   }
@@ -230,7 +232,6 @@ export class UI {
       <div class="stat"><span>Initial points</span><strong>${CONFIG.INITIAL_POINTS}</strong></div>
       <div class="stat"><span>Time penalty</span><strong>None</strong></div>
       <div class="stat"><span>Cashier</span><strong>N/A (static)</strong></div>
-      <div class="stat"><span>Scenarios</span><strong>20 (no timer)</strong></div>
       <div class="stat"><span>Approx. duration</span><strong>Self-paced</strong></div>
     `;
   }
@@ -384,8 +385,8 @@ export class UI {
   showEndScreen({ finalScore, totalTimeSec, durationTotalSec, decisions, events, trajLen, gameMode, hasRedirect }) {
     document.getElementById('finalScoreText').textContent = finalScore;
     if (gameMode === 'SOCIAL_NORMS') {
-      document.getElementById('endTimeLabel').textContent = 'Total Scenarios';
-      document.getElementById('endTime').textContent = events + ' / 20';
+      document.getElementById('endTimeLabel').textContent = 'Scenarios';
+      document.getElementById('endTime').textContent = String(events);
     } else {
       document.getElementById('endTimeLabel').textContent = 'Total Time';
       document.getElementById('endTime').textContent = totalTimeSec.toFixed(1) + 's';
@@ -409,7 +410,7 @@ export class UI {
     this.scoreEl.textContent = Math.round(score);
     if (gameMode === 'SOCIAL_NORMS') {
       document.getElementById('elapsedLabel').textContent = 'Scenarios';
-      this.timeEl.textContent = `${eventsCount} / 20`;
+      this.timeEl.textContent = `${eventsCount}`;
     } else {
       document.getElementById('elapsedLabel').textContent = 'Elapsed';
       this.timeEl.textContent = time.toFixed(1) + 's';
@@ -440,6 +441,30 @@ export class UI {
   clearBanner() {
     this.bannerEl.classList.remove('show');
     this.vignetteEl.classList.remove('active');
+    this.setDecisionCountdown(null, 0);
+  }
+
+  /**
+   * Seconds left to decide on the active event (REALTIME only). `level` > 0
+   * means the window is closing: the pill, the banner and the vignette turn
+   * red and pulse. Pass null to hide.
+   */
+  setDecisionCountdown(remainingS, level = 0) {
+    if (!this.countdownEl) return;
+    if (remainingS === null || remainingS === undefined) {
+      this.countdownEl.style.display = 'none';
+      this.countdownEl.textContent = '';
+      this.countdownEl.classList.remove('critical');
+      this.bannerEl.classList.remove('critical');
+      this.vignetteEl.classList.remove('critical');
+      return;
+    }
+    const critical = level > 0;
+    this.countdownEl.style.display = 'inline-flex';
+    this.countdownEl.textContent = `⏱ ${Math.ceil(remainingS)}s`;
+    this.countdownEl.classList.toggle('critical', critical);
+    this.bannerEl.classList.toggle('critical', critical);
+    this.vignetteEl.classList.toggle('critical', critical);
   }
 
   log(message, kind = 'info') {

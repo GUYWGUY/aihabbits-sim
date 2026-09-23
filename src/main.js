@@ -282,8 +282,15 @@ function startGame(mode = experiment.mode) {
   });
 
   ui.renderDefaultActions();
+
+  // Dev-only handle so a specific event/branch can be forced from the console
+  // (e.g. __sim.events.triggerIsraeliQueue()) instead of waiting for the RNG.
+  if (connect.devMode) {
+    window.__sim = { gs, world, ui, traj, events: eventEngine, endGame };
+  }
+
   if (gs.gameMode === 'SOCIAL_NORMS') {
-    ui.log(`🛒 Experiment started (Social Norms Mode). You will face 20 scenarios. Take your time to decide.`, 'good');
+    ui.log(`🛒 Experiment started. There is no timer — take your time on each scenario.`, 'good');
   } else {
     ui.log(`🛒 Simulation started. You're #${gs.playerPosition()} in line. Good luck!`, 'good');
   }
@@ -330,7 +337,7 @@ function endGame(reason) {
   });
 
   if (reason === 'COMPLETED_SOCIAL_NORMS') {
-    ui.log(`🏁 Experiment complete! All 20 scenarios resolved.`, 'good');
+    ui.log(`🏁 Experiment complete! All scenarios resolved.`, 'good');
   } else {
     ui.log(`🏁 ${reason === 'TIMEOUT' ? 'Time cap reached.' : 'Checkout complete!'}`, 'good');
   }
