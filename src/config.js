@@ -20,10 +20,15 @@ export const CONFIG = {
   INITIAL_QUEUE_LEN_RANGE: [7, 9],    // NPCs in front of player at start
   EXTRA_NPCS_BEHIND: 3,               // cosmetic queue length behind player
 
-  // ---- event engine ----
-  EVENT_FIRST_AT_S: 20,               // earliest possible event
-  EVENT_CHECK_S: 18,                  // minimum spacing between checks
-  EVENT_CHECK_JITTER_S: 4,            // randomness on top (average 20s)
+  // ---- event engine (REALTIME) ----
+  // Time from one event's start to the next, sampled from a triangular
+  // distribution (min, mode, max): averages 15 s, never under 10 or over 20.
+  // The first event uses the same draw, measured from the start. If the
+  // previous event is still being resolved when the draw expires, the next
+  // one fires as soon as it finishes.
+  EVENT_GAP_MIN_S: 10,
+  EVENT_GAP_MODE_S: 15,
+  EVENT_GAP_MAX_S: 20,
   EVENT_PROB: 1.0,                    // P(trigger | check) - always trigger when check time arrives
   MAX_EVENTS: 12,                     // safety cap
 

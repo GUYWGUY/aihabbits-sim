@@ -14,7 +14,7 @@ sees a mode selector — the study they accepted decides which condition they ge
 | # | URL | Experiment | What it is |
 |---|---|---|---|
 | 1 | `/social` | `SOCIAL_NORMS` | **No timing.** Norms in isolation: no timer, no point bleed, static cashier. 20 consecutive scenarios balanced across the three event types. |
-| 2 | `/realtime` | `REALTIME` | **With timing.** Real-pace queue: time bleeds points (−1/sec), the cashier advances the line, random events roughly every 20s. Ends at the cashier (or the 10-minute cap). |
+| 2 | `/realtime` | `REALTIME` | **With timing.** Real-pace queue: time bleeds points (−1/sec), the cashier advances the line, random events every 10–20 s (avg 15). Ends at the cashier (or the 10-minute cap). |
 | — | `/` | — | Landing page linking to both. Not a study target. |
 
 Connect studies: experiment 1 → project `D8C0223B7E`, experiment 2 → project `570B52049B`
@@ -232,7 +232,7 @@ All gameplay constants live in [`src/config.js`](src/config.js). Notable default
 | `CASHIER_MEAN_S` / `CASHIER_SD_S` | 30 / 8 | normal-distributed scan time |
 | `INITIAL_QUEUE_LEN_RANGE` | [7, 9] | NPCs in front of player |
 | `EXTRA_NPCS_BEHIND` | 3 | cosmetic queue length |
-| `EVENT_CHECK_S` / `EVENT_PROB` | 25 / 0.6 | spacing × probability ≈ 1 event / 30s |
+| `EVENT_GAP_MIN_S` / `MODE` / `MAX` | 10 / 15 / 20 | start-to-start spacing, triangular draw (avg 15 s); next event waits for the previous one to finish |
 | `MAX_DURATION_S` | 600 | hard 10-minute safety cap (sessions end at the cashier, ~5 min) |
 | `DECISION_WINDOW_S` / `DECISION_WARN_S` | 10 / 4 | REALTIME only: seconds to choose before the passive option is taken; red warning (plumbob + vignette + countdown) starts this many seconds before the end |
 

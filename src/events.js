@@ -21,6 +21,20 @@ function gaussian(mean, sd, min = 0.5) {
   return Math.max(min, mean + z * sd);
 }
 
+// Triangular(min, mode, max) sample — inverse-CDF. Used for event spacing so
+// the pacing feels irregular without ever being extreme.
+function triangular(min, mode, max) {
+  const u = Math.random();
+  const f = (mode - min) / (max - min);
+  return u < f
+    ? min + Math.sqrt(u * (max - min) * (mode - min))
+    : max - Math.sqrt((1 - u) * (max - min) * (max - mode));
+}
+
+function sampleEventGap() {
+  return triangular(CONFIG.EVENT_GAP_MIN_S, CONFIG.EVENT_GAP_MODE_S, CONFIG.EVENT_GAP_MAX_S);
+}
+
 export class EventEngine {
   /**
    * @param {object} args
@@ -36,7 +50,7 @@ export class EventEngine {
     this.onAction = onAction;
     this.onEndGame = onEndGame;
 
-    this.nextCheckSec = CONFIG.EVENT_FIRST_AT_S;
+    this.nextCheckSec = sampleEventGap();
     this.activeDroppedItems = null;
   }
 
@@ -56,8 +70,7 @@ export class EventEngine {
       return;
     }
     if (this.gs.elapsedSec < this.nextCheckSec) return;
-    this.nextCheckSec =
-      this.gs.elapsedSec + CONFIG.EVENT_CHECK_S + Math.random() * CONFIG.EVENT_CHECK_JITTER_S;
+    this.nextCheckSec = this.gs.elapsedSec + sampleEventGap();
 
     if (this.gs.eventsCount >= CONFIG.MAX_EVENTS) return;
     if (this.gs.isPlayerAtCashier()) return;
